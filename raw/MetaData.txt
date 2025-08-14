@@ -1,0 +1,48 @@
+Name of CSV:	CPI_Monthly_Jan_2013_to_Jun_2025.csv
+Description of CSV:	Monthly Consumer Price Index (Combined) for India.
+Columns and their Description:
+DATE : Month (YYYY-MM-DD). Represents the reference month (first day used as month marker).
+CPI_COMBINED_BASE2012_100 : All-India CPI Combined index, base 2012=100 (MoSPI).
+
+Name of CSV:	GDP_Quarterly_2010_2025.csv
+Description of CSV:	Quarterly GDP for India (levels; MOSPI national accounts).
+Columns and their Description:
+quarter : Quarter label (e.g., 2012-Q1).
+gdp : Quarterly GDP level (units as in file; typically constant-price INR).
+
+Name of CSV:	Nifty50.csv
+Description of CSV:	Daily NIFTY 50 index levels (market close), as exported from your source file.
+Columns and their Description:
+Date : Trading date (YYYY-MM-DD).
+Price : Close price of NIFTY 50 index.
+Open : Opening price.
+High : Session high.
+Low : Session low.
+Vol. : Trading volume (as provided by source).
+Change % : Daily change as percent (source formatting).
+
+Name of CSV:	NIFTYMidcap100.csv
+Description of CSV:	Daily NIFTY Midcap 100 index levels (market close), as exported from your source file.
+Columns and their Description:
+Date : Trading date (YYYY-MM-DD).
+Price : Close price of NIFTY Midcap 100 index.
+Open : Opening price.
+High : Session high.
+Low : Session low.
+Vol. : Trading volume (as provided by source).
+Change % : Daily change as percent (source formatting).
+
+Name of CSV:	Repo_Rate_Monthly_2010_2025.csv
+Description of CSV:	Monthly policy repo rate series constructed from RBI announcements (prevailing rate carried within months).
+Columns and their Description:
+DATE : Month (YYYY-MM-DD). Represents the reference month (first day used as month marker).
+REPO_RATE_PERCENT : Policy repo rate, percent per annum. Monthly series is step-filled to carry prevailing rate.
+
+Name of CSV:    AnnualRainfall_with_Good_and_Anomaly_2012_2025.csv
+Description of CSV:    Stores the observation of rainfall and its anomaly
+Columns and their Description:
+Year : represents the year
+month (Jan..Dec): represents the month
+rainfall_mm : actual observation
+good_rainfall_mm :IMD normal for that calendar month 
+anomaly_mm : Calculated as good − observed; positive = below normal, negative = above normal
