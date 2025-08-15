@@ -1,0 +1,3 @@
+,R2,MAE,HitRate,MAE_improve_%
+Baseline(ret_prev_q),-0.194,0.041,0.706,
+Enriched(Model),-0.157,0.042,0.706,-0.673

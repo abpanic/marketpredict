@@ -1,0 +1,2 @@
+RQ-1: NOT MET | ΔR²=0.036, MAE improve=-0.7%, ΔHitRate=0.000
+Baseline = ElasticNet(ret_prev_q). Enriched = LightGBM(ret_prev_q + rain/gdp/cpi/repo lags).
