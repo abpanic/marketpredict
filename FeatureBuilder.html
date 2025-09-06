@@ -7514,23 +7514,27 @@ a.anchor-link {
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [3]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># =========================</span>
 <span class="c1"># 0) Imports, engine check, folders</span>
 <span class="c1"># =========================</span>
+
+<span class="c1"># Core data stack + utilities; warnings silenced for cleaner notebook logs</span>
 <span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span><span class="o">,</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span><span class="o">,</span> <span class="nn">warnings</span><span class="o">,</span> <span class="nn">re</span>
 <span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
 <span class="n">warnings</span><span class="o">.</span><span class="n">filterwarnings</span><span class="p">(</span><span class="s1">'ignore'</span><span class="p">)</span>
 
 <span class="c1"># --- Require a Parquet engine ---</span>
+<span class="c1"># We prefer pyarrow; if unavailable, fall back to fastparquet. If neither is present,</span>
+<span class="c1"># raise a clear, actionable error with pip install instructions.</span>
 <span class="k">try</span><span class="p">:</span>
-    <span class="kn">import</span> <span class="nn">pyarrow</span>  <span class="c1"># noqa: F401</span>
+    <span class="kn">import</span> <span class="nn">pyarrow</span>  
     <span class="n">PARQUET_ENGINE</span> <span class="o">=</span> <span class="s2">"pyarrow"</span>
 <span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
-        <span class="kn">import</span> <span class="nn">fastparquet</span>  <span class="c1"># noqa: F401</span>
+        <span class="kn">import</span> <span class="nn">fastparquet</span>  
         <span class="n">PARQUET_ENGINE</span> <span class="o">=</span> <span class="s2">"fastparquet"</span>
     <span class="k">except</span> <span class="ne">ImportError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
@@ -7541,8 +7545,11 @@ a.anchor-link {
             <span class="s2">"  pip install fastparquet"</span>
         <span class="p">)</span> <span class="kn">from</span> <span class="nn">e</span>
 
-<span class="n">RAW</span>  <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s1">'./raw'</span><span class="p">)</span>            <span class="c1"># change if your files are elsewhere</span>
-<span class="n">PROC</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s1">'./processed'</span><span class="p">);</span> <span class="n">PROC</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="c1"># Project I/O roots:</span>
+<span class="c1"># - RAW: expected location for source files (CSV)</span>
+<span class="c1"># - PROC: destination for cleaned/engineered outputs and intermediates</span>
+<span class="n">RAW</span>  <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s1">'./raw'</span><span class="p">)</span>            
+<span class="n">PROC</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s1">'./processed'</span><span class="p">);</span> <span class="n">PROC</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  
 </pre></div>
 </div>
 </div>
@@ -7553,70 +7560,171 @@ a.anchor-link {
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [4]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Robust column picker </span>
 <span class="k">def</span> <span class="nf">pick</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">candidates</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Return the first matching column name in `df` for any of the given `candidates`.</span>
+<span class="sd">    Tries exact match first; if none, falls back to substring (case-insensitive).</span>
+<span class="sd">    Example: pick(df, ["Date", "date", "dt"])</span>
+<span class="sd">    """</span>
+    <span class="c1"># First pass: exact match on provided candidate names</span>
     <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">candidates</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span> <span class="k">return</span> <span class="n">c</span>
+        <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span> 
+            <span class="k">return</span> <span class="n">c</span>
+    <span class="c1"># Second pass: substring match (case-insensitive) against all columns</span>
     <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
         <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">candidates</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">k</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">in</span> <span class="n">c</span><span class="o">.</span><span class="n">lower</span><span class="p">():</span> <span class="k">return</span> <span class="n">c</span>
+            <span class="k">if</span> <span class="n">k</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">in</span> <span class="n">c</span><span class="o">.</span><span class="n">lower</span><span class="p">():</span> 
+                <span class="k">return</span> <span class="n">c</span>
+    <span class="c1"># Nothing matched</span>
     <span class="k">return</span> <span class="kc">None</span>
 
+
 <span class="c1"># Smart date parser: chooses the best of multiple formats by coverage</span>
-<span class="kn">from</span> <span class="nn">dateutil</span> <span class="kn">import</span> <span class="n">parser</span> <span class="k">as</span> <span class="n">_dateparser</span>
+<span class="kn">from</span> <span class="nn">dateutil</span> <span class="kn">import</span> <span class="n">parser</span> <span class="k">as</span> <span class="n">_dateparser</span>  <span class="c1"># (Imported for completeness; not used directly)</span>
 
 <span class="k">def</span> <span class="nf">smart_parse_dates</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Try several parsing strategies and choose the one that:</span>
+<span class="sd">      1) Parses the most non-null timestamps,</span>
+<span class="sd">      2) Yields a higher median 'months per year' coverage,</span>
+<span class="sd">      3) Yields a larger set of unique months overall (tie-breaker).</span>
+<span class="sd">    Prints a small summary of the chosen strategy.</span>
+<span class="sd">    """</span>
+    <span class="c1"># Ensure string input for robust parsing</span>
     <span class="n">s</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+
+    <span class="c1"># Candidate parsing attempts: 'infer', 'dayfirst', and a set of explicit formats</span>
     <span class="n">attempts</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">attempts</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="s1">'infer'</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">)))</span>
     <span class="n">attempts</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="s1">'dayfirst'</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">,</span> <span class="n">dayfirst</span><span class="o">=</span><span class="kc">True</span><span class="p">)))</span>
-    <span class="n">fmts</span> <span class="o">=</span> <span class="p">[</span><span class="s1">'</span><span class="si">%d</span><span class="s1">-%b-%Y'</span><span class="p">,</span><span class="s1">'</span><span class="si">%d</span><span class="s1">-%b-%y'</span><span class="p">,</span><span class="s1">'</span><span class="si">%d</span><span class="s1">/%m/%Y'</span><span class="p">,</span><span class="s1">'%m/</span><span class="si">%d</span><span class="s1">/%Y'</span><span class="p">,</span><span class="s1">'%Y-%m-</span><span class="si">%d</span><span class="s1">'</span><span class="p">,</span><span class="s1">'%b </span><span class="si">%d</span><span class="s1">, %Y'</span><span class="p">,</span><span class="s1">'</span><span class="si">%d</span><span class="s1"> %b %Y'</span><span class="p">,</span><span class="s1">'%b %Y'</span><span class="p">,</span><span class="s1">'%m-%Y'</span><span class="p">]</span>
+    <span class="n">fmts</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="s1">'</span><span class="si">%d</span><span class="s1">-%b-%Y'</span><span class="p">,</span><span class="s1">'</span><span class="si">%d</span><span class="s1">-%b-%y'</span><span class="p">,</span><span class="s1">'</span><span class="si">%d</span><span class="s1">/%m/%Y'</span><span class="p">,</span><span class="s1">'%m/</span><span class="si">%d</span><span class="s1">/%Y'</span><span class="p">,</span><span class="s1">'%Y-%m-</span><span class="si">%d</span><span class="s1">'</span><span class="p">,</span>
+        <span class="s1">'%b </span><span class="si">%d</span><span class="s1">, %Y'</span><span class="p">,</span><span class="s1">'</span><span class="si">%d</span><span class="s1"> %b %Y'</span><span class="p">,</span><span class="s1">'%b %Y'</span><span class="p">,</span><span class="s1">'%m-%Y'</span>
+    <span class="p">]</span>
     <span class="k">for</span> <span class="n">fmt</span> <span class="ow">in</span> <span class="n">fmts</span><span class="p">:</span>
         <span class="n">attempts</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">fmt</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="nb">format</span><span class="o">=</span><span class="n">fmt</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">)))</span>
+
+    <span class="c1"># Scoring function to compare parsing outcomes across attempts</span>
     <span class="k">def</span> <span class="nf">score</span><span class="p">(</span><span class="n">dt</span><span class="p">):</span>
         <span class="n">ok</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
-        <span class="k">if</span> <span class="n">ok</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span> <span class="k">return</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">ok</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span> 
+            <span class="k">return</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="c1"># Build a simple "presence" series indexed by parsed datetimes</span>
         <span class="n">ser</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">ok</span><span class="p">)</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
-        <span class="n">by_year_months</span> <span class="o">=</span> <span class="n">ser</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ser</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">year</span><span class="p">)</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">month</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">()))</span>
+        <span class="c1"># Count unique months present per year, then take the median across years</span>
+        <span class="n">by_year_months</span> <span class="o">=</span> <span class="n">ser</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ser</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">year</span><span class="p">)</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">month</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">())</span>
+        <span class="p">)</span>
         <span class="n">med_months</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">by_year_months</span><span class="o">.</span><span class="n">median</span><span class="p">())</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">by_year_months</span><span class="p">)</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="c1"># Return tuple: (#parsed rows, median months per year, total unique months)</span>
         <span class="k">return</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">ok</span><span class="p">),</span> <span class="n">med_months</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">(</span><span class="n">ok</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">month</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">()))</span>
-    <span class="n">best_name</span><span class="p">,</span> <span class="n">best_dt</span><span class="p">,</span> <span class="n">best_score</span> <span class="o">=</span> <span class="nb">max</span><span class="p">([(</span><span class="n">n</span><span class="p">,</span><span class="n">d</span><span class="p">,</span><span class="n">score</span><span class="p">(</span><span class="n">d</span><span class="p">))</span> <span class="k">for</span> <span class="n">n</span><span class="p">,</span><span class="n">d</span> <span class="ow">in</span> <span class="n">attempts</span><span class="p">],</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">t</span><span class="p">:</span> <span class="n">t</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[smart_parse_dates] picked: </span><span class="si">{</span><span class="n">best_name</span><span class="si">}</span><span class="s2"> | parsed=</span><span class="si">{</span><span class="n">best_score</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> | median months/yr=</span><span class="si">{</span><span class="n">best_score</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> | unique months=</span><span class="si">{</span><span class="n">best_score</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+    <span class="c1"># Pick the attempt with the best score (lexicographic max on the tuple above)</span>
+    <span class="n">best_name</span><span class="p">,</span> <span class="n">best_dt</span><span class="p">,</span> <span class="n">best_score</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span>
+        <span class="p">[(</span><span class="n">n</span><span class="p">,</span> <span class="n">d</span><span class="p">,</span> <span class="n">score</span><span class="p">(</span><span class="n">d</span><span class="p">))</span> <span class="k">for</span> <span class="n">n</span><span class="p">,</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">attempts</span><span class="p">],</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">t</span><span class="p">:</span> <span class="n">t</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"[smart_parse_dates] picked: </span><span class="si">{</span><span class="n">best_name</span><span class="si">}</span><span class="s2"> | parsed=</span><span class="si">{</span><span class="n">best_score</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> "</span>
+        <span class="sa">f</span><span class="s2">"| median months/yr=</span><span class="si">{</span><span class="n">best_score</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> | unique months=</span><span class="si">{</span><span class="n">best_score</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span>
+    <span class="p">)</span>
     <span class="k">return</span> <span class="n">best_dt</span>
 
+
 <span class="k">def</span> <span class="nf">parse_dates_in_df</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="o">=</span><span class="s1">'Date'</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Parse the `date_col` in `df` using `smart_parse_dates`, drop rows with null dates,</span>
+<span class="sd">    and return the DataFrame sorted by the parsed date.</span>
+<span class="sd">    """</span>
     <span class="n">out</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="c1"># Best-effort date parsing across multiple formats</span>
     <span class="n">out</span><span class="p">[</span><span class="n">date_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">smart_parse_dates</span><span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">date_col</span><span class="p">])</span>
+    <span class="c1"># Drop rows where date failed to parse; keep only valid dates</span>
     <span class="n">out</span> <span class="o">=</span> <span class="n">out</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="n">date_col</span><span class="p">])</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="n">date_col</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">out</span>
 
+
 <span class="k">def</span> <span class="nf">_parse_investing_prices</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="o">=</span><span class="s1">'Date'</span><span class="p">,</span> <span class="n">price_col</span><span class="o">=</span><span class="s1">'Price'</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Clean Investing.com style price tables:</span>
+<span class="sd">      - Parse dates robustly,</span>
+<span class="sd">      - Strip thousands separators from price strings,</span>
+<span class="sd">      - Coerce numeric and drop non-numeric rows.</span>
+<span class="sd">    Returns a tidy two-column frame [date_col, price_col].</span>
+<span class="sd">    """</span>
     <span class="n">out</span> <span class="o">=</span> <span class="n">parse_dates_in_df</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="o">=</span><span class="n">date_col</span><span class="p">)</span>
-    <span class="n">out</span><span class="p">[</span><span class="n">price_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_numeric</span><span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">price_col</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">','</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">)</span>
+
+    <span class="c1"># Remove commas in price strings (e.g., "12,345.67") before numeric coercion</span>
+    <span class="n">out</span><span class="p">[</span><span class="n">price_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_numeric</span><span class="p">(</span>
+        <span class="n">out</span><span class="p">[</span><span class="n">price_col</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">','</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Drop rows where price is missing or unparsable</span>
     <span class="n">out</span> <span class="o">=</span> <span class="n">out</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="n">price_col</span><span class="p">])</span>
     <span class="k">return</span> <span class="n">out</span><span class="p">[[</span><span class="n">date_col</span><span class="p">,</span> <span class="n">price_col</span><span class="p">]]</span>
 
+
 <span class="k">def</span> <span class="nf">investing_to_quarter_ret</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="o">=</span><span class="s1">'Date'</span><span class="p">,</span> <span class="n">price_col</span><span class="o">=</span><span class="s1">'Price'</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Convert (typically daily) price data into quarter-over-quarter simple returns.</span>
+<span class="sd">    Steps:</span>
+<span class="sd">      1) Clean with `_parse_investing_prices`,</span>
+<span class="sd">      2) Resample to quarter-end and take last price,</span>
+<span class="sd">      3) Compute pct_change vs. previous quarter.</span>
+<span class="sd">    Returns a pandas Series indexed by quarter-end.</span>
+<span class="sd">    """</span>
     <span class="n">df2</span> <span class="o">=</span> <span class="n">_parse_investing_prices</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="p">,</span> <span class="n">price_col</span><span class="p">)</span>
+
+    <span class="c1"># Use quarter-end snapshots (last trading day per quarter)</span>
     <span class="n">q_end_price</span> <span class="o">=</span> <span class="n">df2</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">date_col</span><span class="p">)[</span><span class="n">price_col</span><span class="p">]</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">'Q'</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">()</span>
+
+    <span class="c1"># Quarter-over-quarter simple return</span>
     <span class="k">return</span> <span class="n">q_end_price</span><span class="o">.</span><span class="n">pct_change</span><span class="p">()</span>
 
+
 <span class="k">def</span> <span class="nf">monthly_to_quarter</span><span class="p">(</span><span class="n">series</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s1">'mean'</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Aggregate a monthly series to quarterly frequency.</span>
+<span class="sd">    - how='mean' (default): average within the quarter,</span>
+<span class="sd">    - how!='mean'      : take the last month in the quarter (quarter-end snapshot).</span>
+<span class="sd">    """</span>
+    <span class="c1"># Choose aggregation method based on `how`</span>
     <span class="k">return</span> <span class="n">series</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">'Q'</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="k">if</span> <span class="n">how</span><span class="o">==</span><span class="s1">'mean'</span> <span class="k">else</span> <span class="n">series</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">'Q'</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">()</span>
 
+
 <span class="k">def</span> <span class="nf">yoy_from_monthly</span><span class="p">(</span><span class="n">series</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Compute year-over-year % change for a monthly series.</span>
+<span class="sd">    Assumes the index is a DatetimeIndex at monthly frequency.</span>
+<span class="sd">    Returns percent values (×100).</span>
+<span class="sd">    """</span>
     <span class="k">return</span> <span class="n">series</span><span class="o">.</span><span class="n">pct_change</span><span class="p">(</span><span class="mi">12</span><span class="p">)</span> <span class="o">*</span> <span class="mf">100.0</span>
 
+
 <span class="k">def</span> <span class="nf">check_monthly_coverage</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="o">=</span><span class="s1">'Date'</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">'series'</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Print which months appear in each year and warn about completely missing quarters.</span>
+<span class="sd">    Helpful before resampling to ensure even coverage.</span>
+<span class="sd">    """</span>
+    <span class="c1"># Parse dates and drop nulls for coverage accounting</span>
     <span class="n">dates</span> <span class="o">=</span> <span class="n">smart_parse_dates</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="n">date_col</span><span class="p">])</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
+
+    <span class="c1"># Presence series: one row per observed date</span>
     <span class="n">ser</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">dates</span><span class="p">)</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
-    <span class="n">months_per_year</span> <span class="o">=</span> <span class="n">ser</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ser</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">year</span><span class="p">)</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">month</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">()))</span>
+
+    <span class="c1"># List months present per year (e.g., [1, 2, 3, ...])</span>
+    <span class="n">months_per_year</span> <span class="o">=</span> <span class="n">ser</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ser</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">year</span><span class="p">)</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+        <span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">month</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">())</span>
+    <span class="p">)</span>
+
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[</span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2">] Months present per year:"</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">y</span><span class="p">,</span> <span class="n">months</span> <span class="ow">in</span> <span class="n">months_per_year</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">y</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">months</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+    <span class="c1"># Count number of rows per quarter; warn if any quarter has zero rows</span>
     <span class="n">q_counts</span> <span class="o">=</span> <span class="n">ser</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">'Q'</span><span class="p">)</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
     <span class="n">miss</span> <span class="o">=</span> <span class="n">q_counts</span><span class="p">[</span><span class="n">q_counts</span> <span class="o">==</span> <span class="mi">0</span><span class="p">]</span>
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">miss</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
@@ -7628,98 +7736,212 @@ a.anchor-link {
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=108ee50d">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=108ee50d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [5]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Ensure files exist in ./raw</span>
+<span class="c1"># Load raw daily price data for NIFTY 50 and NIFTY Midcap 100.</span>
+<span class="c1"># Expected columns: 'Date' and 'Price' (string numbers ok; cleaned in helper).</span>
 <span class="n">n50_raw</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'Nifty50.csv'</span><span class="p">)</span>
 <span class="n">mid_raw</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'NIFTYMidcap100.csv'</span><span class="p">)</span>
 
 <span class="c1"># Quick coverage QA (helps catch wrong date parsing or partial exports)</span>
+<span class="c1"># Prints months present per year and warns if any quarter has zero rows.</span>
 <span class="n">check_monthly_coverage</span><span class="p">(</span><span class="n">n50_raw</span><span class="p">,</span> <span class="s1">'Date'</span><span class="p">,</span> <span class="s1">'NIFTY 50'</span><span class="p">)</span>
 <span class="n">check_monthly_coverage</span><span class="p">(</span><span class="n">mid_raw</span><span class="p">,</span> <span class="s1">'Date'</span><span class="p">,</span> <span class="s1">'NIFTY Midcap 100'</span><span class="p">)</span>
 
+<span class="c1"># Convert daily prices -&gt; quarter-end prices -&gt; quarter-over-quarter returns.</span>
+<span class="c1"># Uses last trading day in each quarter; simple returns via pct_change().</span>
 <span class="n">nifty_qret</span>  <span class="o">=</span> <span class="n">investing_to_quarter_ret</span><span class="p">(</span><span class="n">n50_raw</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'nifty_qret'</span><span class="p">)</span>
 <span class="n">midcap_qret</span> <span class="o">=</span> <span class="n">investing_to_quarter_ret</span><span class="p">(</span><span class="n">mid_raw</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'midcap_qret'</span><span class="p">)</span>
+
+<span class="c1"># Compute quarterly excess return (Midcap minus NIFTY).</span>
+<span class="c1"># Pandas aligns on the DatetimeIndex; any non-overlapping quarters yield NaN.</span>
 <span class="n">excess_ret</span>  <span class="o">=</span> <span class="p">(</span><span class="n">midcap_qret</span> <span class="o">-</span> <span class="n">nifty_qret</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'excess_ret'</span><span class="p">)</span>
 
+<span class="c1"># Small diagnostic — how many quarters where both returns exist (non-NaN)?</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">"Index quarterly points (excess_ret):"</span><span class="p">,</span> <span class="n">excess_ret</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
 </pre></div>
 </div>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=71cf198b">
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>[smart_parse_dates] picked: infer | parsed=188 | median months/yr=12 | unique months=12
+[NIFTY 50] Months present per year:
+  2010: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2011: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2012: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2013: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2014: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2015: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2016: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2017: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2018: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2019: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2020: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2021: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2022: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2023: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2024: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2025: [1, 2, 3, 4, 5, 6, 7, 8]
+[NIFTY 50] ✅ At least one row in every quarter.
+[smart_parse_dates] picked: infer | parsed=188 | median months/yr=12 | unique months=12
+[NIFTY Midcap 100] Months present per year:
+  2010: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2011: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2012: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2013: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2014: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2015: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2016: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2017: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2018: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2019: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2020: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2021: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2022: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2023: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2024: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  2025: [1, 2, 3, 4, 5, 6, 7, 8]
+[NIFTY Midcap 100] ✅ At least one row in every quarter.
+[smart_parse_dates] picked: infer | parsed=188 | median months/yr=12 | unique months=12
+[smart_parse_dates] picked: infer | parsed=188 | median months/yr=12 | unique months=12
+Index quarterly points (excess_ret): 62
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=71cf198b">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [6]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># CPI monthly to YoY% to quarterly mean</span>
+
+<span class="c1"># Read CPI data (monthly frequency expected)</span>
 <span class="n">cpi</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'CPI_Monthly_Jan_2013_to_Jun_2025.csv'</span><span class="p">)</span>  <span class="c1"># &lt;- file name you uploaded</span>
-<span class="n">c_date</span> <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">cpi</span><span class="p">,</span> <span class="p">[</span><span class="s1">'DATE'</span><span class="p">,</span><span class="s1">'Date'</span><span class="p">,</span><span class="s1">'Month'</span><span class="p">,</span><span class="s1">'Period'</span><span class="p">])</span>           <span class="c1"># will choose 'DATE'</span>
-<span class="n">c_val</span>  <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">cpi</span><span class="p">,</span> <span class="p">[</span><span class="s1">'CPI'</span><span class="p">,</span><span class="s1">'Index'</span><span class="p">,</span><span class="s1">'Value'</span><span class="p">,</span><span class="s1">'CPI_COMBINED_BASE2012_100'</span><span class="p">])</span>  <span class="c1"># will choose 'CPI_COMBINED_BASE2012_100'</span>
 
-<span class="n">cpi</span> <span class="o">=</span> <span class="n">parse_dates_in_df</span><span class="p">(</span><span class="n">cpi</span><span class="p">,</span> <span class="n">c_date</span><span class="p">)</span>   <span class="c1"># smart date parser picked "infer" in my check</span>
-<span class="n">cpi_m</span> <span class="o">=</span> <span class="n">cpi</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">c_date</span><span class="p">)[</span><span class="n">c_val</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'cpi_index'</span><span class="p">)</span>
+<span class="c1"># Try to locate the date and value columns even if headers vary</span>
+<span class="n">c_date</span> <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">cpi</span><span class="p">,</span> <span class="p">[</span><span class="s1">'DATE'</span><span class="p">,</span><span class="s1">'Date'</span><span class="p">,</span><span class="s1">'Month'</span><span class="p">,</span><span class="s1">'Period'</span><span class="p">])</span>           <span class="c1"># likely 'DATE'</span>
+<span class="n">c_val</span>  <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">cpi</span><span class="p">,</span> <span class="p">[</span><span class="s1">'CPI'</span><span class="p">,</span><span class="s1">'Index'</span><span class="p">,</span><span class="s1">'Value'</span><span class="p">,</span><span class="s1">'CPI_COMBINED_BASE2012_100'</span><span class="p">])</span>  <span class="c1"># likely 'CPI_COMBINED_BASE2012_100'</span>
 
-<span class="c1"># YoY requires 12 months of history, so the first 12 rows will be NaN (expected)</span>
+<span class="c1"># Defensive checks in case the expected headers aren't present</span>
+<span class="k">if</span> <span class="n">c_date</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">c_val</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span><span class="s2">"Could not identify CPI date/value columns; please inspect the CSV headers."</span><span class="p">)</span>
+
+<span class="c1"># Parse dates robustly and sort; drop rows with unparseable dates</span>
+<span class="c1"># (smart_parse_dates prints the chosen strategy and coverage info)</span>
+<span class="n">cpi</span> <span class="o">=</span> <span class="n">parse_dates_in_df</span><span class="p">(</span><span class="n">cpi</span><span class="p">,</span> <span class="n">c_date</span><span class="p">)</span>   <span class="c1"># e.g., smart parser may pick 'infer'</span>
+
+<span class="c1"># Build a clean monthly CPI index series (float), indexed by datetime</span>
+<span class="n">cpi_m</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">cpi</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">c_date</span><span class="p">)[</span><span class="n">c_val</span><span class="p">]</span>
+       <span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+       <span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'cpi_index'</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="c1"># Compute YoY % change: requires 12 months of history</span>
+<span class="c1"># The first 12 entries will be NaN by definition—this is expected.</span>
 <span class="n">cpi_yoy_m</span> <span class="o">=</span> <span class="n">yoy_from_monthly</span><span class="p">(</span><span class="n">cpi_m</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'cpi_yoy_m'</span><span class="p">)</span>
 
-<span class="c1"># Aggregate to quarterly (mean of three months)</span>
+<span class="c1"># Aggregate monthly YoY to quarterly using the mean of the three months in each quarter.</span>
+<span class="c1"># This reduces month-to-month noise and aligns with other quarterly features/targets.</span>
 <span class="n">cpi_yoy_q</span> <span class="o">=</span> <span class="n">monthly_to_quarter</span><span class="p">(</span><span class="n">cpi_yoy_m</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s1">'mean'</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'cpi_yoy'</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">"CPI monthly points:"</span><span class="p">,</span> <span class="n">cpi_m</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s2">"| CPI YoY monthly (non-NaN):"</span><span class="p">,</span> <span class="n">cpi_yoy_m</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+<span class="c1"># Quick diagnostics</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"CPI monthly points:"</span><span class="p">,</span> <span class="n">cpi_m</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> 
+      <span class="s2">"| CPI YoY monthly (non-NaN):"</span><span class="p">,</span> <span class="n">cpi_yoy_m</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">"CPI quarterly points:"</span><span class="p">,</span> <span class="n">cpi_yoy_q</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+<span class="c1"># persist intermediates for reuse</span>
+<span class="c1"># cpi_m.to_frame().to_parquet(PROC/'cpi_monthly.parquet', engine=PARQUET_ENGINE)</span>
+<span class="c1"># cpi_yoy_q.dropna().to_frame().to_parquet(PROC/'cpi_yoy_quarterly.parquet', engine=PARQUET_ENGINE)</span>
 </pre></div>
 </div>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=b8fbf1b9">
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>[smart_parse_dates] picked: infer | parsed=150 | median months/yr=12 | unique months=12
+CPI monthly points: 150 | CPI YoY monthly (non-NaN): 138
+CPI quarterly points: 46
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=b8fbf1b9">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [7]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># --- GDP quarterly loader (fixes '2012.0-Q1' etc.) ---</span>
 
 <span class="kn">import</span> <span class="nn">re</span>
-<span class="kn">from</span> <span class="nn">pandas.tseries.offsets</span> <span class="kn">import</span> <span class="n">QuarterEnd</span>
+<span class="kn">from</span> <span class="nn">pandas.tseries.offsets</span> <span class="kn">import</span> <span class="n">QuarterEnd</span>  <span class="c1"># imported if you later need explicit quarter-end arithmetic</span>
 
+<span class="c1"># Read the raw GDP table</span>
 <span class="n">gdp_raw</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'GDP_Quarterly_2010_2025.csv'</span><span class="p">)</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
 
 <span class="c1"># 1) Clean numeric column</span>
+<span class="c1"># Expect a GDP "level" column named 'gdp'; coerce strings like "1,234.5" into float.</span>
 <span class="k">if</span> <span class="s1">'gdp'</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">gdp_raw</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Expected a 'gdp' column in GDP_Quarterly_2010_2025.csv"</span><span class="p">)</span>
+
 <span class="n">gdp_raw</span><span class="p">[</span><span class="s1">'gdp_clean'</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_numeric</span><span class="p">(</span>
     <span class="n">gdp_raw</span><span class="p">[</span><span class="s1">'gdp'</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">','</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
     <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span>
 <span class="p">)</span>
 
 <span class="c1"># 2) Normalize quarter strings (strip the '.0' before '-Q')</span>
+<span class="c1"># Expect some variant of a quarter label in a column named 'quarter'.</span>
 <span class="k">if</span> <span class="s1">'quarter'</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">gdp_raw</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Expected a 'quarter' column in GDP_Quarterly_2010_2025.csv"</span><span class="p">)</span>
 
+<span class="c1"># Remove trailing ".0" artifacts that sometimes appear after numeric-to-string conversions.</span>
 <span class="n">gdp_raw</span><span class="p">[</span><span class="s1">'quarter_str'</span><span class="p">]</span> <span class="o">=</span> <span class="n">gdp_raw</span><span class="p">[</span><span class="s1">'quarter'</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">'.0'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
 <span class="c1"># 3) Extract YYYY and Qn from anything like '2012-Q1', '2012Q1', 'Q1 2012.0', etc.</span>
+<span class="c1"># Use a permissive regex to find 4-digit year followed by a 'Q[1-4]' anywhere in the string.</span>
 <span class="n">m</span> <span class="o">=</span> <span class="n">gdp_raw</span><span class="p">[</span><span class="s1">'quarter_str'</span><span class="p">]</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">extract</span><span class="p">(</span><span class="sa">r</span><span class="s1">'(?P&lt;y&gt;\d</span><span class="si">{4}</span><span class="s1">).*?Q(?P&lt;q&gt;[1-4])'</span><span class="p">)</span>
+
+<span class="c1"># Build canonical tokens like "2012Q1" and mark valid rows</span>
 <span class="n">qstr</span> <span class="o">=</span> <span class="p">(</span><span class="n">m</span><span class="p">[</span><span class="s1">'y'</span><span class="p">]</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="s1">''</span><span class="p">)</span> <span class="o">+</span> <span class="s1">'Q'</span> <span class="o">+</span> <span class="n">m</span><span class="p">[</span><span class="s1">'q'</span><span class="p">]</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="s1">''</span><span class="p">))</span>
 <span class="n">valid</span> <span class="o">=</span> <span class="n">qstr</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="sa">r</span><span class="s1">'^\d</span><span class="si">{4}</span><span class="s1">Q[1-4]$'</span><span class="p">)</span>
 
+<span class="c1"># Keep only rows that parse into a clean Year+Quarter token</span>
 <span class="n">gdp_norm</span> <span class="o">=</span> <span class="n">gdp_raw</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">valid</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+<span class="c1"># Convert to quarter-end timestamps using PeriodIndex (calendar quarters)</span>
 <span class="n">gdp_norm</span><span class="p">[</span><span class="s1">'__q'</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">PeriodIndex</span><span class="p">(</span><span class="n">qstr</span><span class="p">[</span><span class="n">valid</span><span class="p">],</span> <span class="n">freq</span><span class="o">=</span><span class="s1">'Q'</span><span class="p">)</span><span class="o">.</span><span class="n">to_timestamp</span><span class="p">(</span><span class="n">how</span><span class="o">=</span><span class="s1">'end'</span><span class="p">)</span>
 
 <span class="c1"># 4) Build a clean quarterly level series (last obs per quarter if duplicates)</span>
+<span class="c1"># If multiple rows map to the same quarter, take the last one (common when data is revised).</span>
 <span class="n">gdp_q_level</span> <span class="o">=</span> <span class="p">(</span><span class="n">gdp_norm</span>
                <span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="s1">'__q'</span><span class="p">,</span><span class="s1">'gdp_clean'</span><span class="p">])</span>
                <span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s1">'__q'</span><span class="p">)</span>
@@ -7728,6 +7950,7 @@ a.anchor-link {
                <span class="o">.</span><span class="n">last</span><span class="p">())</span>
 
 <span class="c1"># 5) Compute YoY from levels (4-quarter change * 100)</span>
+<span class="c1"># This assumes levels are comparable across quarters (same base/deflator).</span>
 <span class="n">gdp_q</span> <span class="o">=</span> <span class="n">gdp_q_level</span><span class="o">.</span><span class="n">pct_change</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span><span class="o">.</span><span class="n">mul</span><span class="p">(</span><span class="mf">100.0</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'gdp_yoy'</span><span class="p">)</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
 
 <span class="c1"># 6) Diagnostics</span>
@@ -7742,12 +7965,41 @@ a.anchor-link {
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=cc385914">
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Unique 'quarter' samples: ['2012.0-Q1' '2012.0-Q2' '2012.0-Q3' '2012.0-Q4' '2013.0-Q1' '2013.0-Q2'
+ '2013.0-Q3' '2013.0-Q4']
+Normalized samples: ['2012-Q1' '2012-Q2' '2012-Q3' '2012-Q4' '2013-Q1' '2013-Q2' '2013-Q3'
+ '2013-Q4']
+GDP quarterly points: 50
+GDP range: 2013-03-31 → 2025-06-30
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>__q
+2013-03-31    4.296010
+2013-06-30    6.447099
+2013-09-30    7.337749
+2013-12-31    6.534983
+Freq: QE-DEC, Name: gdp_yoy, dtype: float64</pre>
+</div>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cc385914">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [8]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="k">def</span> <span class="nf">load_repo_monthly_to_quarter</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">):</span>
@@ -7761,27 +8013,34 @@ a.anchor-link {
 
     <span class="c1"># 2) parse dates &amp; clean numeric</span>
     <span class="n">df</span> <span class="o">=</span> <span class="n">parse_dates_in_df</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="n">dcol</span><span class="p">)</span>
+
+    <span class="c1"># Remove thousands separators and '%' symbols; strip whitespace (use .str.strip(), not .str.trim())</span>
+    <span class="c1"># Also nuke zero-width spaces that sometimes sneak in from copy-paste exports.</span>
     <span class="n">val</span> <span class="o">=</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="n">vcol</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+                  <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">'</span><span class="se">\u200b</span><span class="s1">'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
                   <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">','</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
                   <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">'%'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
                   <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">strip</span><span class="p">())</span>
     <span class="n">val</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_numeric</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">)</span>
 
     <span class="c1"># 3) detect scaling (percent vs fraction)</span>
-    <span class="c1"># typical RBI repo is ~4–10; if values look like 0.04–0.10, scale by 100</span>
+    <span class="c1"># Typical RBI repo is ~4–10; if values look like 0.04–0.10, scale by 100 to percent.</span>
     <span class="n">median_abs</span> <span class="o">=</span> <span class="n">val</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">median</span><span class="p">()</span>
-    <span class="k">if</span> <span class="n">pd</span><span class="o">.</span><span class="n">notna</span><span class="p">(</span><span class="n">median_abs</span><span class="p">)</span> <span class="ow">and</span> <span class="n">median_abs</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>  <span class="c1"># e.g., 0.065</span>
+    <span class="k">if</span> <span class="n">pd</span><span class="o">.</span><span class="n">notna</span><span class="p">(</span><span class="n">median_abs</span><span class="p">)</span> <span class="ow">and</span> <span class="n">median_abs</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
         <span class="n">val</span> <span class="o">=</span> <span class="n">val</span> <span class="o">*</span> <span class="mf">100.0</span>
 
+    <span class="c1"># Attach cleaned numeric, dropping rows that still fail numeric coercion</span>
     <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">val</span><span class="o">=</span><span class="n">val</span><span class="p">)</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="s1">'val'</span><span class="p">])</span>
 
+    <span class="k">if</span> <span class="n">df</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Repo series is empty after cleaning; check the source file/headers."</span><span class="p">)</span>
+
     <span class="c1"># 4) normalize to month-end stamps, forward-fill missing months</span>
-    <span class="c1"># (so quarter-end 'last' is well-defined even if a month is missing)</span>
     <span class="n">m_end</span> <span class="o">=</span> <span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">dcol</span><span class="p">)[</span><span class="s1">'val'</span><span class="p">]</span>
                <span class="o">.</span><span class="n">to_period</span><span class="p">(</span><span class="s1">'M'</span><span class="p">)</span><span class="o">.</span><span class="n">to_timestamp</span><span class="p">(</span><span class="s1">'M'</span><span class="p">)</span>
                <span class="o">.</span><span class="n">sort_index</span><span class="p">())</span>
 
-    <span class="c1"># create a complete monthly index, forward-fill within series</span>
+    <span class="c1"># Create a complete month-end index and forward-fill inside the series</span>
     <span class="n">full_m</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">date_range</span><span class="p">(</span><span class="n">m_end</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">m_end</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span> <span class="n">freq</span><span class="o">=</span><span class="s1">'M'</span><span class="p">)</span>
     <span class="n">m_end</span> <span class="o">=</span> <span class="n">m_end</span><span class="o">.</span><span class="n">reindex</span><span class="p">(</span><span class="n">full_m</span><span class="p">)</span><span class="o">.</span><span class="n">ffill</span><span class="p">()</span>
 
@@ -7807,12 +8066,38 @@ a.anchor-link {
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=99452c77">
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>[smart_parse_dates] picked: infer | parsed=188 | median months/yr=12 | unique months=12
+[Repo] months covered: 12 median months/yr; quarters: 63 (2010-03-31 → 2025-09-30)
+2024-09-30    6.50
+2024-12-31    6.50
+2025-03-31    6.25
+2025-06-30    5.50
+2025-09-30    5.50
+Freq: QE-DEC, Name: repo, dtype: float64
+2024-09-30     0.0
+2024-12-31     0.0
+2025-03-31   -25.0
+2025-06-30   -75.0
+2025-09-30     0.0
+Freq: QE-DEC, Name: repo_chg_bps, dtype: float64
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=99452c77">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [9]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># ---- Rainfall seasonal anomaly from your monthly file (2012–2025) ----</span>
@@ -7833,6 +8118,7 @@ a.anchor-link {
 <span class="n">mons</span> <span class="o">=</span> <span class="n">rain</span><span class="p">[</span><span class="n">rain</span><span class="p">[</span><span class="s1">'mon'</span><span class="p">]</span><span class="o">.</span><span class="n">between</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">9</span><span class="p">)]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
 
 <span class="c1"># --- QA 1: ensure each monsoon season has its 4 months ---</span>
+<span class="c1"># If a year has missing months (e.g., data gaps), flag it early.</span>
 <span class="n">miss</span> <span class="o">=</span> <span class="p">(</span><span class="n">mons</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ycol</span><span class="p">)[</span><span class="s1">'mon'</span><span class="p">]</span>
             <span class="o">.</span><span class="n">nunique</span><span class="p">()</span>
             <span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'monsoon_months'</span><span class="p">)</span>
@@ -7849,9 +8135,10 @@ a.anchor-link {
 <span class="p">)</span>
 
 <span class="c1"># IMD-style anomaly%: (observed - normal)/normal * 100  (positive = above normal)</span>
+<span class="c1"># NOTE: norm_mm should be &gt; 0; if zeros exist, handle before division to avoid inf/-inf.</span>
 <span class="n">grp</span><span class="p">[</span><span class="s1">'rain_anom_pct'</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">grp</span><span class="p">[</span><span class="s1">'obs_mm'</span><span class="p">]</span> <span class="o">-</span> <span class="n">grp</span><span class="p">[</span><span class="s1">'norm_mm'</span><span class="p">])</span> <span class="o">/</span> <span class="n">grp</span><span class="p">[</span><span class="s1">'norm_mm'</span><span class="p">]</span> <span class="o">*</span> <span class="mf">100.0</span>
 
-<span class="c1"># Optional cross-check using your provided anomaly_mm (remember: good - observed)</span>
+<span class="c1"># cross-check using your provided anomaly_mm (good - observed)</span>
 <span class="c1"># If you want to verify signs, uncomment:</span>
 <span class="c1"># check = mons.groupby(ycol, as_index=False).agg(anom_mm_sum=(mm_anom_col, 'sum'),</span>
 <span class="c1">#                                                norm_mm_sum=(norm_col, 'sum'))</span>
@@ -7859,6 +8146,7 @@ a.anchor-link {
 <span class="c1"># print(check[[ycol,'alt_pct_from_file']].head())</span>
 
 <span class="c1"># Stamp each year's anomaly at Sep-30; forward-fill within the same year → quarterly series</span>
+<span class="c1"># This holds the SW monsoon signal from Q3 (Sep) through Q4/Q1/Q2 until the next Sep stamp.</span>
 <span class="n">rain_idx</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">grp</span><span class="p">[</span><span class="n">ycol</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span> <span class="o">+</span> <span class="s1">'-09-30'</span><span class="p">)</span>
 <span class="n">rain_q</span> <span class="o">=</span> <span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">grp</span><span class="p">[</span><span class="s1">'rain_anom_pct'</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">rain_idx</span><span class="p">)</span>
             <span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">'Q'</span><span class="p">)</span><span class="o">.</span><span class="n">ffill</span><span class="p">()</span>
@@ -7871,31 +8159,167 @@ a.anchor-link {
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=9b155a56">
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Rainfall seasonal years covered: [2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+Rainfall quarterly points: 53 | Range: 2012-09-30 → 2025-09-30
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=9b155a56">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [10]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># 1) Build the modeling DataFrame on the shared quarterly intersection</span>
+<span class="c1"># Use an INNER join so we only keep quarters present in *all* component series.</span>
 <span class="n">parts</span> <span class="o">=</span> <span class="p">[</span><span class="n">excess_ret</span><span class="p">,</span> <span class="n">midcap_qret</span><span class="p">,</span> <span class="n">nifty_qret</span><span class="p">,</span> <span class="n">rain_q</span><span class="p">,</span> <span class="n">cpi_yoy_q</span><span class="p">,</span> <span class="n">gdp_q</span><span class="p">,</span> <span class="n">repo_chg_bps</span><span class="p">]</span>
 <span class="n">qdf</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">parts</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">join</span><span class="o">=</span><span class="s1">'inner'</span><span class="p">)</span>  <span class="c1"># inner = strict intersection of all indices</span>
+
+<span class="c1"># Normalize index to *quarter-end* timestamps (calendar quarters) for consistency</span>
 <span class="n">qdf</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="n">qdf</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">to_period</span><span class="p">(</span><span class="s1">'Q'</span><span class="p">)</span><span class="o">.</span><span class="n">to_timestamp</span><span class="p">(</span><span class="s1">'Q'</span><span class="p">)</span>
+
 <span class="c1"># 2) Create lags (t-1) and the prediction target (t+1)</span>
-<span class="n">qdf</span><span class="p">[</span><span class="s1">'ret_prev_q'</span><span class="p">]</span>    <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'midcap_qret'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-<span class="n">qdf</span><span class="p">[</span><span class="s1">'rain_anom_lag'</span><span class="p">]</span> <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'rain_anom'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-<span class="n">qdf</span><span class="p">[</span><span class="s1">'cpi_yoy_lag'</span><span class="p">]</span>   <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'cpi_yoy'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-<span class="n">qdf</span><span class="p">[</span><span class="s1">'gdp_yoy_lag'</span><span class="p">]</span>   <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'gdp_yoy'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-<span class="n">qdf</span><span class="p">[</span><span class="s1">'repo_chg_lag'</span><span class="p">]</span>  <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'repo_chg_bps'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="c1"># Feature lags: use previous quarter's information to predict the next quarter</span>
+<span class="n">qdf</span><span class="p">[</span><span class="s1">'ret_prev_q'</span><span class="p">]</span>    <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'midcap_qret'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>   <span class="c1"># prior quarter midcap return</span>
+<span class="n">qdf</span><span class="p">[</span><span class="s1">'rain_anom_lag'</span><span class="p">]</span> <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'rain_anom'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>     <span class="c1"># prior monsoon anomaly %</span>
+<span class="n">qdf</span><span class="p">[</span><span class="s1">'cpi_yoy_lag'</span><span class="p">]</span>   <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'cpi_yoy'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>       <span class="c1"># prior quarter CPI YoY %</span>
+<span class="n">qdf</span><span class="p">[</span><span class="s1">'gdp_yoy_lag'</span><span class="p">]</span>   <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'gdp_yoy'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>       <span class="c1"># prior quarter GDP YoY %</span>
+<span class="n">qdf</span><span class="p">[</span><span class="s1">'repo_chg_lag'</span><span class="p">]</span>  <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'repo_chg_bps'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># prior quarter repo Δ (bps)</span>
+
+<span class="c1"># Target: next quarter's midcap-vs-nifty *excess* return (t+1)</span>
 <span class="n">qdf</span><span class="p">[</span><span class="s1">'excess_next_q'</span><span class="p">]</span> <span class="o">=</span> <span class="n">qdf</span><span class="p">[</span><span class="s1">'excess_ret'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
 
 <span class="c1"># 3) Clean rows created by shifting and print a quick QA</span>
+<span class="c1"># Drop any rows with NaNs introduced by the shifts (first/last quarters)</span>
 <span class="n">qdf</span> <span class="o">=</span> <span class="n">qdf</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">how</span><span class="o">=</span><span class="s2">"any"</span><span class="p">)</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">"Final quarterly rows:"</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">qdf</span><span class="p">),</span> <span class="s2">"| Range:"</span><span class="p">,</span> <span class="n">qdf</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">(),</span> <span class="s2">"→"</span><span class="p">,</span> <span class="n">qdf</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">())</span>
+
+<span class="c1"># Basic coverage diagnostic</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Final quarterly rows:"</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">qdf</span><span class="p">),</span> 
+      <span class="s2">"| Range:"</span><span class="p">,</span> <span class="n">qdf</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">(),</span> <span class="s2">"→"</span><span class="p">,</span> <span class="n">qdf</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">())</span>
+
+<span class="c1"># Peek at the main contemporaneous series to confirm values look reasonable</span>
 <span class="n">qdf</span><span class="p">[[</span><span class="s1">'midcap_qret'</span><span class="p">,</span><span class="s1">'nifty_qret'</span><span class="p">,</span><span class="s1">'excess_ret'</span><span class="p">,</span><span class="s1">'rain_anom'</span><span class="p">,</span><span class="s1">'cpi_yoy'</span><span class="p">,</span><span class="s1">'gdp_yoy'</span><span class="p">,</span><span class="s1">'repo_chg_bps'</span><span class="p">]]</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
 </pre></div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Final quarterly rows: 44 | Range: 2014-06-30 → 2025-03-31
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child jp-OutputArea-executeResult">
+<div class="jp-OutputPrompt jp-OutputArea-prompt">Out[10]:</div>
+<div class="jp-RenderedHTMLCommon jp-RenderedHTML jp-OutputArea-output jp-OutputArea-executeResult" data-mime-type="text/html" tabindex="0">
+<div>
+<style scoped="">
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+<thead>
+<tr style="text-align: right;">
+<th></th>
+<th>midcap_qret</th>
+<th>nifty_qret</th>
+<th>excess_ret</th>
+<th>rain_anom</th>
+<th>cpi_yoy</th>
+<th>gdp_yoy</th>
+<th>repo_chg_bps</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th>2014-06-30</th>
+<td>0.288472</td>
+<td>0.135311</td>
+<td>0.153161</td>
+<td>69.879102</td>
+<td>7.859486</td>
+<td>8.023963</td>
+<td>0.0</td>
+</tr>
+<tr>
+<th>2014-09-30</th>
+<td>0.028963</td>
+<td>0.046437</td>
+<td>-0.017474</td>
+<td>-7.449626</td>
+<td>6.681568</td>
+<td>8.704109</td>
+<td>0.0</td>
+</tr>
+<tr>
+<th>2014-12-31</th>
+<td>0.102077</td>
+<td>0.039913</td>
+<td>0.062164</td>
+<td>-7.449626</td>
+<td>4.054538</td>
+<td>5.922736</td>
+<td>0.0</td>
+</tr>
+<tr>
+<th>2015-03-31</th>
+<td>0.033169</td>
+<td>0.025149</td>
+<td>0.008021</td>
+<td>-7.449626</td>
+<td>5.272440</td>
+<td>7.112080</td>
+<td>-50.0</td>
+</tr>
+<tr>
+<th>2015-06-30</th>
+<td>0.000646</td>
+<td>-0.014427</td>
+<td>0.015073</td>
+<td>-7.449626</td>
+<td>5.090809</td>
+<td>7.592544</td>
+<td>-25.0</td>
+</tr>
+<tr>
+<th>2015-09-30</th>
+<td>-0.001933</td>
+<td>-0.050140</td>
+<td>0.048207</td>
+<td>-6.171560</td>
+<td>3.948304</td>
+<td>8.033806</td>
+<td>-50.0</td>
+</tr>
+</tbody>
+</table>
+</div>
 </div>
 </div>
 </div>
@@ -7905,15 +8329,452 @@ a.anchor-link {
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [11]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="n">qdf_out</span> <span class="o">=</span> <span class="n">qdf</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
-<span class="n">qdf_out</span><span class="p">[</span><span class="s1">'excess_next_q'</span><span class="p">]</span> <span class="o">=</span> <span class="n">qdf_out</span><span class="p">[</span><span class="s1">'excess_ret'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-<span class="n">qdf_out</span><span class="p">[</span><span class="s1">'ret_prev_q'</span><span class="p">]</span>    <span class="o">=</span> <span class="n">qdf_out</span><span class="p">[</span><span class="s1">'midcap_qret'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span> <span class="o">-</span><span class="mi">1</span> <span class="p">)</span>  
-<span class="n">qdf_final</span> <span class="o">=</span> <span class="n">qdf</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s1">'index'</span><span class="p">:</span><span class="s1">'date_q'</span><span class="p">})</span>
-<span class="n">qdf_final</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">PROC</span><span class="o">/</span><span class="s1">'quarterly_features.csv'</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+<span class="c1"># Re-derive target: next-quarter excess return (t+1).</span>
+<span class="c1"># NOTE: This duplicates the earlier definition; harmless but redundant.</span>
+<span class="c1">#qdf_out['excess_next_q'] = qdf_out['excess_ret'].shift(-1)</span>
+
+<span class="c1"># Define "previous quarter" return feature.</span>
+<span class="c1"># ⚠ NOTE: shift(-1) uses the *next* quarter's value, which introduces look-ahead leakage.</span>
+<span class="c1"># If you truly intend t-1, use shift(1). See "After" notes below.</span>
+<span class="n">qdf_out</span><span class="p">[</span><span class="s1">'ret_prev_q'</span><span class="p">]</span>    <span class="o">=</span> <span class="n">qdf_out</span><span class="p">[</span><span class="s1">'midcap_qret'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>  
+
+<span class="c1"># Build a version for export with a materialized date column (quarter-end timestamp)</span>
+<span class="c1"># The reset_index() will turn the DatetimeIndex into a column named 'index' (since the index has no name).</span>
+<span class="c1"># We then rename it to 'date_q' for clarity.</span>
+<span class="n">qdf_final</span> <span class="o">=</span> <span class="n">qdf_out</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s1">'index'</span><span class="p">:</span><span class="s1">'date_q'</span><span class="p">})</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">PROC</span><span class="o">/</span><span class="s1">'quarterly_features.csv'</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+
+<span class="c1"># Write out a CSV artifact for downstream modeling.</span>
+<span class="n">qdf_out</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="n">PROC</span><span class="o">/</span><span class="s1">'quarterly_features.parquet'</span><span class="p">,</span> <span class="n">engine</span><span class="o">=</span><span class="n">PARQUET_ENGINE</span><span class="p">)</span>
 </pre></div>
+</div>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=7192e6d7">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># ==============================</span>
+<span class="c1"># Monthly FeatureBuilder (M)</span>
+<span class="c1"># ==============================</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span><span class="o">,</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span><span class="o">,</span> <span class="nn">warnings</span><span class="o">,</span> <span class="nn">re</span>
+<span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+<span class="n">warnings</span><span class="o">.</span><span class="n">filterwarnings</span><span class="p">(</span><span class="s1">'ignore'</span><span class="p">)</span>
+
+<span class="n">RAW</span>  <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s1">'./raw'</span><span class="p">)</span>
+<span class="n">PROC</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s1">'./processed'</span><span class="p">);</span> <span class="n">PROC</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="c1"># ---- Parquet engine (optional) ----</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">pyarrow</span>  <span class="c1"># noqa</span>
+    <span class="n">PARQUET_ENGINE</span> <span class="o">=</span> <span class="s2">"pyarrow"</span>
+<span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">import</span> <span class="nn">fastparquet</span>  <span class="c1"># noqa</span>
+        <span class="n">PARQUET_ENGINE</span> <span class="o">=</span> <span class="s2">"fastparquet"</span>
+    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+        <span class="n">PARQUET_ENGINE</span> <span class="o">=</span> <span class="kc">None</span>
+
+<span class="c1"># ---- Safe display (optional) ----</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">IPython.display</span> <span class="kn">import</span> <span class="n">display</span>
+<span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+    <span class="k">def</span> <span class="nf">display</span><span class="p">(</span><span class="n">x</span><span class="p">):</span> <span class="nb">print</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="c1"># -----------------------------</span>
+<span class="c1"># Helpers (robust &amp; re-used)</span>
+<span class="c1"># -----------------------------</span>
+<span class="k">def</span> <span class="nf">pick</span><span class="p">(</span><span class="n">df_or_cols</span><span class="p">,</span> <span class="n">candidates</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Return first matching column from df.columns or list of columns.</span>
+<span class="sd">       Exact &gt; longest substring."""</span>
+    <span class="n">cols</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">df_or_cols</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">df_or_cols</span><span class="p">,</span> <span class="s2">"columns"</span><span class="p">)</span> <span class="k">else</span> <span class="nb">list</span><span class="p">(</span><span class="n">df_or_cols</span><span class="p">)</span>
+    <span class="c1"># exact match first</span>
+    <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">candidates</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">cols</span><span class="p">:</span> <span class="k">return</span> <span class="n">c</span>
+    <span class="c1"># then longest substring match</span>
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">candidates</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="nb">len</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">cols</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">k</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">in</span> <span class="n">c</span><span class="o">.</span><span class="n">lower</span><span class="p">():</span> <span class="k">return</span> <span class="n">c</span>
+    <span class="k">return</span> <span class="kc">None</span>
+
+<span class="k">def</span> <span class="nf">smart_parse_dates</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
+    <span class="n">s</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+    <span class="n">attempts</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">attempts</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="s1">'infer'</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">)))</span>
+    <span class="n">attempts</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="s1">'dayfirst'</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">,</span> <span class="n">dayfirst</span><span class="o">=</span><span class="kc">True</span><span class="p">)))</span>
+    <span class="n">fmts</span> <span class="o">=</span> <span class="p">[</span><span class="s1">'</span><span class="si">%d</span><span class="s1">-%b-%Y'</span><span class="p">,</span><span class="s1">'</span><span class="si">%d</span><span class="s1">-%b-%y'</span><span class="p">,</span><span class="s1">'</span><span class="si">%d</span><span class="s1">/%m/%Y'</span><span class="p">,</span><span class="s1">'%m/</span><span class="si">%d</span><span class="s1">/%Y'</span><span class="p">,</span><span class="s1">'%Y-%m-</span><span class="si">%d</span><span class="s1">'</span><span class="p">,</span><span class="s1">'%b </span><span class="si">%d</span><span class="s1">, %Y'</span><span class="p">,</span><span class="s1">'</span><span class="si">%d</span><span class="s1"> %b %Y'</span><span class="p">,</span><span class="s1">'%b %Y'</span><span class="p">,</span><span class="s1">'%m-%Y'</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">fmt</span> <span class="ow">in</span> <span class="n">fmts</span><span class="p">:</span>
+        <span class="n">attempts</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">fmt</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="nb">format</span><span class="o">=</span><span class="n">fmt</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">)))</span>
+    <span class="k">def</span> <span class="nf">score</span><span class="p">(</span><span class="n">dt</span><span class="p">):</span>
+        <span class="n">ok</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">ok</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span> <span class="k">return</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">ser</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">ok</span><span class="p">)</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+        <span class="n">by_year_months</span> <span class="o">=</span> <span class="n">ser</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ser</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">year</span><span class="p">)</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">month</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">()))</span>
+        <span class="n">med_months</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">by_year_months</span><span class="o">.</span><span class="n">median</span><span class="p">())</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">by_year_months</span><span class="p">)</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="k">return</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">ok</span><span class="p">),</span> <span class="n">med_months</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">(</span><span class="n">ok</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">month</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">()))</span>
+    <span class="n">best_name</span><span class="p">,</span> <span class="n">best_dt</span><span class="p">,</span> <span class="n">best_score</span> <span class="o">=</span> <span class="nb">max</span><span class="p">([(</span><span class="n">n</span><span class="p">,</span><span class="n">d</span><span class="p">,</span><span class="n">score</span><span class="p">(</span><span class="n">d</span><span class="p">))</span> <span class="k">for</span> <span class="n">n</span><span class="p">,</span><span class="n">d</span> <span class="ow">in</span> <span class="n">attempts</span><span class="p">],</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">t</span><span class="p">:</span> <span class="n">t</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[smart_parse_dates] picked: </span><span class="si">{</span><span class="n">best_name</span><span class="si">}</span><span class="s2"> | parsed=</span><span class="si">{</span><span class="n">best_score</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> | med months/yr=</span><span class="si">{</span><span class="n">best_score</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> | unique months=</span><span class="si">{</span><span class="n">best_score</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">best_dt</span>
+
+<span class="k">def</span> <span class="nf">parse_dates_in_df</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="p">):</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">out</span><span class="p">[</span><span class="n">date_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">smart_parse_dates</span><span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">date_col</span><span class="p">])</span>
+    <span class="k">return</span> <span class="n">out</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="n">date_col</span><span class="p">])</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="n">date_col</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">_parse_investing_prices</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="o">=</span><span class="s1">'Date'</span><span class="p">,</span> <span class="n">price_col</span><span class="o">=</span><span class="s1">'Price'</span><span class="p">):</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">parse_dates_in_df</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="o">=</span><span class="n">date_col</span><span class="p">)</span>
+    <span class="n">out</span><span class="p">[</span><span class="n">price_col</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">price_col</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+                                   <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">r</span><span class="s1">'[,\s₹$]'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                                   <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">r</span><span class="s1">'[^0-9.\-]'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+    <span class="n">out</span><span class="p">[</span><span class="n">price_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_numeric</span><span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">price_col</span><span class="p">],</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">out</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="n">price_col</span><span class="p">])[[</span><span class="n">date_col</span><span class="p">,</span> <span class="n">price_col</span><span class="p">]]</span>
+
+<span class="k">def</span> <span class="nf">prices_to_monthly_ret</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="o">=</span><span class="s1">'Date'</span><span class="p">,</span> <span class="n">price_col</span><span class="o">=</span><span class="s1">'Price'</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Monthly pct change from month-end closes (last available trading day)."""</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="p">(</span><span class="n">_parse_investing_prices</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">date_col</span><span class="p">,</span> <span class="n">price_col</span><span class="p">)</span>
+           <span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">date_col</span><span class="p">)[</span><span class="n">price_col</span><span class="p">]</span>
+           <span class="o">.</span><span class="n">sort_index</span><span class="p">())</span>
+    <span class="n">m_close</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">'M'</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">()</span>           <span class="c1"># last trading day each month</span>
+    <span class="k">return</span> <span class="n">m_close</span><span class="o">.</span><span class="n">pct_change</span><span class="p">()</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'mret'</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">yoy_from_monthly</span><span class="p">(</span><span class="n">series</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">series</span><span class="o">.</span><span class="n">pct_change</span><span class="p">(</span><span class="mi">12</span><span class="p">)</span> <span class="o">*</span> <span class="mf">100.0</span>
+
+<span class="k">def</span> <span class="nf">to_numeric_clean</span><span class="p">(</span><span class="n">s</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Coerce to float after stripping commas, spaces, NBSP and non-numeric junk."""</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+              <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">r</span><span class="s1">'[\u00A0\s,]'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># spaces/NBSP/commas</span>
+              <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">r</span><span class="s1">'[^0-9.\-]'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>     <span class="c1"># keep digits dot minus</span>
+              <span class="o">.</span><span class="n">replace</span><span class="p">({</span><span class="s1">''</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">})</span>
+              <span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">))</span>
+
+
+<span class="c1"># -----------------------------</span>
+<span class="c1"># 1) Index returns (monthly)</span>
+<span class="c1"># -----------------------------</span>
+<span class="n">n50_raw</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'Nifty50.csv'</span><span class="p">)</span>
+<span class="n">mid_raw</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'NIFTYMidcap100.csv'</span><span class="p">)</span>
+
+<span class="n">nifty_mret</span>  <span class="o">=</span> <span class="n">prices_to_monthly_ret</span><span class="p">(</span><span class="n">n50_raw</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'nifty_mret'</span><span class="p">)</span>
+<span class="n">midcap_mret</span> <span class="o">=</span> <span class="n">prices_to_monthly_ret</span><span class="p">(</span><span class="n">mid_raw</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'midcap_mret'</span><span class="p">)</span>
+<span class="n">excess_ret</span>  <span class="o">=</span> <span class="p">(</span><span class="n">midcap_mret</span> <span class="o">-</span> <span class="n">nifty_mret</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'excess_ret'</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"[IDX] Months:"</span><span class="p">,</span> <span class="n">excess_ret</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s2">"| Range:"</span><span class="p">,</span> <span class="n">excess_ret</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">(),</span> <span class="s2">"→"</span><span class="p">,</span> <span class="n">excess_ret</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">())</span>
+
+<span class="c1"># -----------------------------</span>
+<span class="c1"># 2) CPI (monthly YoY)</span>
+<span class="c1"># -----------------------------</span>
+<span class="n">cpi</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'CPI_Monthly_Jan_2013_to_Jun_2025.csv'</span><span class="p">)</span>
+<span class="n">c_date</span> <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">cpi</span><span class="p">,</span> <span class="p">[</span><span class="s1">'DATE'</span><span class="p">,</span><span class="s1">'Date'</span><span class="p">,</span><span class="s1">'Month'</span><span class="p">,</span><span class="s1">'Period'</span><span class="p">])</span>
+<span class="n">c_val</span>  <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">cpi</span><span class="p">,</span> <span class="p">[</span><span class="s1">'CPI_COMBINED_BASE2012_100'</span><span class="p">,</span><span class="s1">'CPI'</span><span class="p">,</span><span class="s1">'Index'</span><span class="p">,</span><span class="s1">'Value'</span><span class="p">])</span>
+<span class="n">cpi</span> <span class="o">=</span> <span class="n">parse_dates_in_df</span><span class="p">(</span><span class="n">cpi</span><span class="p">,</span> <span class="n">c_date</span><span class="p">)</span>
+
+<span class="n">cpi_m</span> <span class="o">=</span> <span class="p">(</span><span class="n">to_numeric_clean</span><span class="p">(</span><span class="n">cpi</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">c_date</span><span class="p">)[</span><span class="n">c_val</span><span class="p">])</span>
+           <span class="o">.</span><span class="n">to_period</span><span class="p">(</span><span class="s1">'M'</span><span class="p">)</span><span class="o">.</span><span class="n">to_timestamp</span><span class="p">(</span><span class="s1">'M'</span><span class="p">)</span>
+           <span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'cpi_index'</span><span class="p">))</span>
+<span class="n">cpi_yoy_m</span> <span class="o">=</span> <span class="n">yoy_from_monthly</span><span class="p">(</span><span class="n">cpi_m</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'cpi_yoy'</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"[CPI] Monthly points:"</span><span class="p">,</span> <span class="n">cpi_m</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s2">"| YoY non-NaN:"</span><span class="p">,</span> <span class="n">cpi_yoy_m</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+<span class="c1"># -----------------------------</span>
+<span class="c1"># 3) GDP (quarterly YoY → monthly)</span>
+<span class="c1"># -----------------------------</span>
+<span class="n">gdp</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'GDP_Quarterly_2010_2025.csv'</span><span class="p">)</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+<span class="k">if</span> <span class="s1">'gdp'</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">gdp</span><span class="o">.</span><span class="n">columns</span> <span class="ow">or</span> <span class="s1">'quarter'</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">gdp</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"GDP CSV must contain columns: 'gdp' and 'quarter'."</span><span class="p">)</span>
+
+<span class="n">gdp</span><span class="p">[</span><span class="s1">'gdp_clean'</span><span class="p">]</span> <span class="o">=</span> <span class="n">to_numeric_clean</span><span class="p">(</span><span class="n">gdp</span><span class="p">[</span><span class="s1">'gdp'</span><span class="p">])</span>
+<span class="n">gdp</span><span class="p">[</span><span class="s1">'quarter_str'</span><span class="p">]</span> <span class="o">=</span> <span class="n">gdp</span><span class="p">[</span><span class="s1">'quarter'</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">'.0'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">m</span> <span class="o">=</span> <span class="n">gdp</span><span class="p">[</span><span class="s1">'quarter_str'</span><span class="p">]</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">extract</span><span class="p">(</span><span class="sa">r</span><span class="s1">'(?P&lt;y&gt;\d</span><span class="si">{4}</span><span class="s1">).*?Q(?P&lt;q&gt;[1-4])'</span><span class="p">)</span>
+<span class="n">qstr</span> <span class="o">=</span> <span class="p">(</span><span class="n">m</span><span class="p">[</span><span class="s1">'y'</span><span class="p">]</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="s1">''</span><span class="p">)</span> <span class="o">+</span> <span class="s1">'Q'</span> <span class="o">+</span> <span class="n">m</span><span class="p">[</span><span class="s1">'q'</span><span class="p">]</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="s1">''</span><span class="p">))</span>
+<span class="n">valid</span> <span class="o">=</span> <span class="n">qstr</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="sa">r</span><span class="s1">'^\d</span><span class="si">{4}</span><span class="s1">Q[1-4]$'</span><span class="p">)</span>
+
+<span class="n">gdp_norm</span> <span class="o">=</span> <span class="n">gdp</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">valid</span> <span class="o">&amp;</span> <span class="n">gdp</span><span class="p">[</span><span class="s1">'gdp_clean'</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+<span class="n">gdp_norm</span><span class="p">[</span><span class="s1">'q_end'</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">PeriodIndex</span><span class="p">(</span><span class="n">qstr</span><span class="p">[</span><span class="n">valid</span><span class="p">],</span> <span class="n">freq</span><span class="o">=</span><span class="s1">'Q'</span><span class="p">)</span><span class="o">.</span><span class="n">to_timestamp</span><span class="p">(</span><span class="n">how</span><span class="o">=</span><span class="s1">'end'</span><span class="p">)</span>
+
+<span class="c1"># quarterly level → YoY%</span>
+<span class="n">gdp_q_level</span> <span class="o">=</span> <span class="p">(</span><span class="n">gdp_norm</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s1">'q_end'</span><span class="p">)[</span><span class="s1">'gdp_clean'</span><span class="p">]</span>
+                         <span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+                         <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Grouper</span><span class="p">(</span><span class="n">freq</span><span class="o">=</span><span class="s1">'Q'</span><span class="p">))</span><span class="o">.</span><span class="n">last</span><span class="p">())</span>
+<span class="n">gdp_yoy_q</span> <span class="o">=</span> <span class="n">gdp_q_level</span><span class="o">.</span><span class="n">pct_change</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span><span class="o">.</span><span class="n">mul</span><span class="p">(</span><span class="mf">100.0</span><span class="p">)</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'gdp_yoy'</span><span class="p">)</span>
+
+<span class="c1"># Expand each quarter’s YoY to its three month-ends explicitly</span>
+<span class="k">def</span> <span class="nf">repeat_quarter_to_months</span><span class="p">(</span><span class="n">q_series</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
+    <span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">q_end</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">q_series</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">m3</span> <span class="o">=</span> <span class="n">q_end</span>
+        <span class="n">m2</span> <span class="o">=</span> <span class="n">q_end</span> <span class="o">-</span> <span class="n">pd</span><span class="o">.</span><span class="n">offsets</span><span class="o">.</span><span class="n">MonthEnd</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>   <span class="c1"># prior month-end</span>
+        <span class="n">m1</span> <span class="o">=</span> <span class="n">q_end</span> <span class="o">-</span> <span class="n">pd</span><span class="o">.</span><span class="n">offsets</span><span class="o">.</span><span class="n">MonthEnd</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>   <span class="c1"># two months back</span>
+        <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">([</span><span class="n">val</span><span class="p">,</span> <span class="n">val</span><span class="p">,</span> <span class="n">val</span><span class="p">],</span> <span class="n">index</span><span class="o">=</span><span class="p">[</span><span class="n">m1</span><span class="p">,</span> <span class="n">m2</span><span class="p">,</span> <span class="n">m3</span><span class="p">]))</span>
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+
+<span class="n">gdp_yoy_m</span> <span class="o">=</span> <span class="n">repeat_quarter_to_months</span><span class="p">(</span><span class="n">gdp_yoy_q</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'gdp_yoy'</span><span class="p">)</span>
+<span class="n">gdp_yoy_m</span> <span class="o">=</span> <span class="n">gdp_yoy_m</span><span class="p">[</span><span class="o">~</span><span class="n">gdp_yoy_m</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">duplicated</span><span class="p">(</span><span class="n">keep</span><span class="o">=</span><span class="s1">'last'</span><span class="p">)]</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"[GDP] Q points:"</span><span class="p">,</span> <span class="n">gdp_yoy_q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> 
+      <span class="s2">"| expanded monthly points:"</span><span class="p">,</span> <span class="n">gdp_yoy_m</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> 
+      <span class="s2">"| sample:"</span><span class="p">,</span> <span class="n">gdp_yoy_m</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">(),</span> <span class="s2">"→"</span><span class="p">,</span> <span class="n">gdp_yoy_m</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">())</span>
+
+<span class="c1"># (Optional realism) – publication lag by 1 month:</span>
+<span class="c1"># gdp_yoy_m = gdp_yoy_m.shift(1)</span>
+
+<span class="c1"># -----------------------------</span>
+<span class="c1"># 4) Repo (monthly level % + Δbps MoM)</span>
+<span class="c1"># -----------------------------</span>
+<span class="n">repo</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'Repo_Rate_Monthly_2010_2025.csv'</span><span class="p">)</span>
+<span class="n">dcol</span> <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">repo</span><span class="p">,</span> <span class="p">[</span><span class="s1">'DATE'</span><span class="p">,</span><span class="s1">'Date'</span><span class="p">,</span><span class="s1">'Month'</span><span class="p">,</span><span class="s1">'Period'</span><span class="p">])</span>
+<span class="n">vcol</span> <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">repo</span><span class="p">,</span> <span class="p">[</span><span class="s1">'REPO_RATE_PERCENT'</span><span class="p">,</span><span class="s1">'Repo'</span><span class="p">,</span><span class="s1">'Rate'</span><span class="p">,</span><span class="s1">'Policy Rate'</span><span class="p">,</span><span class="s1">'REPO'</span><span class="p">])</span>
+<span class="k">if</span> <span class="n">dcol</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">vcol</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Repo CSV must have a date column (DATE/Month/Period) and a value column (Repo/Rate/REPO_RATE_PERCENT)."</span><span class="p">)</span>
+
+<span class="n">repo</span> <span class="o">=</span> <span class="n">parse_dates_in_df</span><span class="p">(</span><span class="n">repo</span><span class="p">,</span> <span class="n">dcol</span><span class="p">)</span>
+<span class="n">r_val</span> <span class="o">=</span> <span class="p">(</span><span class="n">repo</span><span class="p">[</span><span class="n">vcol</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+                  <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">r</span><span class="s1">'[,\s%]'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                  <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">r</span><span class="s1">'[^0-9.\-]'</span><span class="p">,</span> <span class="s1">''</span><span class="p">,</span> <span class="n">regex</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                  <span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">strip</span><span class="p">())</span>
+<span class="n">r_val</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_numeric</span><span class="p">(</span><span class="n">r_val</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s1">'coerce'</span><span class="p">)</span>
+
+<span class="c1"># scale detect: if ~0.06 → 6.0%</span>
+<span class="k">if</span> <span class="n">r_val</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">median</span><span class="p">()</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+    <span class="n">r_val</span> <span class="o">=</span> <span class="n">r_val</span> <span class="o">*</span> <span class="mf">100.0</span>
+
+<span class="n">repo_m</span> <span class="o">=</span> <span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">r_val</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">repo</span><span class="p">[</span><span class="n">dcol</span><span class="p">])</span>
+            <span class="o">.</span><span class="n">to_period</span><span class="p">(</span><span class="s1">'M'</span><span class="p">)</span><span class="o">.</span><span class="n">to_timestamp</span><span class="p">(</span><span class="s1">'M'</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+            <span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">'M'</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">()</span>
+            <span class="o">.</span><span class="n">ffill</span><span class="p">()</span>
+            <span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'repo'</span><span class="p">))</span>
+<span class="n">repo_m</span> <span class="o">=</span> <span class="n">repo_m</span><span class="p">[</span><span class="o">~</span><span class="n">repo_m</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">duplicated</span><span class="p">(</span><span class="n">keep</span><span class="o">=</span><span class="s1">'last'</span><span class="p">)]</span>
+<span class="n">repo_chg_bps_m</span> <span class="o">=</span> <span class="n">repo_m</span><span class="o">.</span><span class="n">diff</span><span class="p">()</span><span class="o">.</span><span class="n">mul</span><span class="p">(</span><span class="mf">100.0</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'repo_chg_bps'</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"[REPO] Months:"</span><span class="p">,</span> <span class="n">repo_m</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s2">"| Range:"</span><span class="p">,</span> <span class="n">repo_m</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">(),</span> <span class="s2">"→"</span><span class="p">,</span> <span class="n">repo_m</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">())</span>
+
+<span class="c1"># -----------------------------</span>
+<span class="c1"># 5) Rainfall (monthly anomaly %)</span>
+<span class="c1"># -----------------------------</span>
+<span class="n">rain</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">RAW</span><span class="o">/</span><span class="s1">'AnnualRainfall_with_Good_and_Anomaly_2012_2025.csv'</span><span class="p">)</span>
+
+<span class="c1"># Column picks (be explicit &amp; log)</span>
+<span class="n">ycol</span> <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">rain</span><span class="p">,</span> <span class="p">[</span><span class="s1">'Year'</span><span class="p">,</span><span class="s1">'year'</span><span class="p">])</span>
+<span class="n">mcol</span> <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">rain</span><span class="p">,</span> <span class="p">[</span><span class="s1">'month'</span><span class="p">,</span><span class="s1">'Month'</span><span class="p">])</span>   <span class="c1"># may be 'month (Jan..Dec)'</span>
+<span class="n">obs_col</span>  <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">rain</span><span class="p">,</span> <span class="p">[</span><span class="s1">'rainfall_mm'</span><span class="p">,</span><span class="s1">'Observed'</span><span class="p">,</span><span class="s1">'Rainfall'</span><span class="p">])</span>
+<span class="n">norm_col</span> <span class="o">=</span> <span class="n">pick</span><span class="p">(</span><span class="n">rain</span><span class="p">,</span> <span class="p">[</span><span class="s1">'good_rainfall_mm'</span><span class="p">,</span><span class="s1">'Normal'</span><span class="p">,</span><span class="s1">'Climatology'</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[RAIN] picks → Year=</span><span class="si">{</span><span class="n">ycol</span><span class="si">}</span><span class="s2">, Month=</span><span class="si">{</span><span class="n">mcol</span><span class="si">}</span><span class="s2">, Obs=</span><span class="si">{</span><span class="n">obs_col</span><span class="si">}</span><span class="s2">, Norm=</span><span class="si">{</span><span class="n">norm_col</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Month label -&gt; month number; make month-end index</span>
+<span class="n">mmap</span> <span class="o">=</span> <span class="p">{</span><span class="n">m</span><span class="p">[:</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">():</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">m</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span>
+    <span class="p">[</span><span class="s1">'Jan'</span><span class="p">,</span><span class="s1">'Feb'</span><span class="p">,</span><span class="s1">'Mar'</span><span class="p">,</span><span class="s1">'Apr'</span><span class="p">,</span><span class="s1">'May'</span><span class="p">,</span><span class="s1">'Jun'</span><span class="p">,</span><span class="s1">'Jul'</span><span class="p">,</span><span class="s1">'Aug'</span><span class="p">,</span><span class="s1">'Sep'</span><span class="p">,</span><span class="s1">'Oct'</span><span class="p">,</span><span class="s1">'Nov'</span><span class="p">,</span><span class="s1">'Dec'</span><span class="p">],</span> <span class="n">start</span><span class="o">=</span><span class="mi">1</span><span class="p">)}</span>
+<span class="n">rain</span><span class="p">[</span><span class="s1">'mon'</span><span class="p">]</span>  <span class="o">=</span> <span class="n">rain</span><span class="p">[</span><span class="n">mcol</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="p">[:</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">mmap</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+<span class="n">rain</span><span class="p">[</span><span class="s1">'year'</span><span class="p">]</span> <span class="o">=</span> <span class="n">to_numeric_clean</span><span class="p">(</span><span class="n">rain</span><span class="p">[</span><span class="n">ycol</span><span class="p">])</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s1">'Int64'</span><span class="p">)</span>
+
+<span class="n">rain_idx</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">rain</span><span class="p">[</span><span class="s1">'year'</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span> <span class="o">+</span> <span class="s1">'-'</span> <span class="o">+</span> <span class="n">rain</span><span class="p">[</span><span class="s1">'mon'</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span> <span class="o">+</span> <span class="s1">'-01'</span><span class="p">)</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">offsets</span><span class="o">.</span><span class="n">MonthEnd</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="c1"># Robust numeric clean for observed/normal</span>
+<span class="n">obs</span>  <span class="o">=</span> <span class="n">to_numeric_clean</span><span class="p">(</span><span class="n">rain</span><span class="p">[</span><span class="n">obs_col</span><span class="p">])</span>
+<span class="n">norm</span> <span class="o">=</span> <span class="n">to_numeric_clean</span><span class="p">(</span><span class="n">rain</span><span class="p">[</span><span class="n">norm_col</span><span class="p">])</span>
+
+<span class="c1"># Avoid divide-by-zero</span>
+<span class="n">norm</span> <span class="o">=</span> <span class="n">norm</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+
+<span class="n">rain_anom_m</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">((</span><span class="n">obs</span> <span class="o">-</span> <span class="n">norm</span><span class="p">)</span> <span class="o">/</span> <span class="n">norm</span> <span class="o">*</span> <span class="mf">100.0</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">rain_idx</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s1">'rain_anom_m'</span><span class="p">)</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+<span class="c1"># If duplicate month-ends exist, keep the last (or .mean() if needed)</span>
+<span class="n">rain_anom_m</span> <span class="o">=</span> <span class="p">(</span><span class="n">rain_anom_m</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">rain_anom_m</span><span class="o">.</span><span class="n">index</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">())</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+<span class="c1"># Smooth option: 3M rolling</span>
+<span class="n">rain_anom_3m</span> <span class="o">=</span> <span class="n">rain_anom_m</span><span class="o">.</span><span class="n">rolling</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">min_periods</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s1">'rain_anom_3m'</span><span class="p">)</span>
+
+<span class="c1"># Option A — use the Series index (DatetimeIndex)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"[RAIN] NaN check → total:"</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">rain_anom_m</span><span class="p">),</span>
+      <span class="s2">"| non-NaN:"</span><span class="p">,</span> <span class="n">rain_anom_m</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+      <span class="s2">"| unique years:"</span><span class="p">,</span> <span class="n">rain_anom_m</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">nunique</span><span class="p">(),</span>
+      <span class="s2">"| range:"</span><span class="p">,</span> <span class="n">rain_anom_m</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">(),</span> <span class="s2">"→"</span><span class="p">,</span> <span class="n">rain_anom_m</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">())</span>
+
+<span class="k">def</span> <span class="nf">report_series</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">s</span><span class="p">):</span>
+    <span class="n">sd</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
+    <span class="n">start</span> <span class="o">=</span> <span class="n">sd</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">()</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">sd</span><span class="o">.</span><span class="n">empty</span> <span class="k">else</span> <span class="s1">'—'</span>
+    <span class="n">end</span>   <span class="o">=</span> <span class="n">sd</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">()</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">sd</span><span class="o">.</span><span class="n">empty</span> <span class="k">else</span> <span class="s1">'—'</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[</span><span class="si">{</span><span class="n">name</span><span class="si">:</span><span class="s2">12</span><span class="si">}</span><span class="s2">] non-NaN=</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">sd</span><span class="p">)</span><span class="si">:</span><span class="s2">4d</span><span class="si">}</span><span class="s2"> | </span><span class="si">{</span><span class="n">start</span><span class="si">}</span><span class="s2"> → </span><span class="si">{</span><span class="n">end</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">--- Coverage before join ---"</span><span class="p">)</span>
+<span class="n">report_series</span><span class="p">(</span><span class="s1">'excess_ret'</span><span class="p">,</span>   <span class="n">excess_ret</span><span class="p">)</span>
+<span class="n">report_series</span><span class="p">(</span><span class="s1">'midcap_mret'</span><span class="p">,</span>  <span class="n">midcap_mret</span><span class="p">)</span>
+<span class="n">report_series</span><span class="p">(</span><span class="s1">'nifty_mret'</span><span class="p">,</span>   <span class="n">nifty_mret</span><span class="p">)</span>
+<span class="n">report_series</span><span class="p">(</span><span class="s1">'cpi_yoy'</span><span class="p">,</span>      <span class="n">cpi_yoy_m</span><span class="p">)</span>
+<span class="n">report_series</span><span class="p">(</span><span class="s1">'gdp_yoy'</span><span class="p">,</span>      <span class="n">gdp_yoy_m</span><span class="p">)</span>
+<span class="n">report_series</span><span class="p">(</span><span class="s1">'repo_pct'</span><span class="p">,</span>     <span class="n">repo_m</span><span class="p">)</span>
+<span class="n">report_series</span><span class="p">(</span><span class="s1">'repo_chg_bps'</span><span class="p">,</span> <span class="n">repo_chg_bps_m</span><span class="p">)</span>
+<span class="n">report_series</span><span class="p">(</span><span class="s1">'rain_anom_m'</span><span class="p">,</span>  <span class="n">rain_anom_m</span><span class="p">)</span>
+<span class="n">report_series</span><span class="p">(</span><span class="s1">'rain_anom_3m'</span><span class="p">,</span> <span class="n">rain_anom_3m</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"----------------------------</span><span class="se">\n</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># -----------------------------</span>
+<span class="c1"># 6) Build monthly features (inner join at month-end)</span>
+<span class="c1"># -----------------------------</span>
+<span class="n">parts</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">excess_ret</span><span class="p">,</span> <span class="n">midcap_mret</span><span class="p">,</span> <span class="n">nifty_mret</span><span class="p">,</span>
+    <span class="n">cpi_yoy_m</span><span class="p">,</span> <span class="n">gdp_yoy_m</span><span class="p">,</span> <span class="n">repo_m</span><span class="p">,</span> <span class="n">repo_chg_bps_m</span><span class="p">,</span>
+    <span class="n">rain_anom_m</span><span class="p">,</span> <span class="n">rain_anom_3m</span>
+<span class="p">]</span>
+<span class="n">mdf</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">parts</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">join</span><span class="o">=</span><span class="s1">'inner'</span><span class="p">)</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+<span class="n">mdf</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="s1">'date_m'</span>
+<span class="n">mdf</span> <span class="o">=</span> <span class="n">mdf</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s1">'repo'</span><span class="p">:</span> <span class="s1">'repo_pct'</span><span class="p">})</span>
+
+<span class="c1"># -----------------------------</span>
+<span class="c1"># 7) Lags &amp; target (month-ahead)</span>
+<span class="c1"># -----------------------------</span>
+<span class="c1"># Lags &amp; target</span>
+<span class="n">mdf</span><span class="p">[</span><span class="s1">'ret_prev_m'</span><span class="p">]</span>       <span class="o">=</span> <span class="n">mdf</span><span class="p">[</span><span class="s1">'midcap_mret'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">mdf</span><span class="p">[</span><span class="s1">'rain_anom_lag'</span><span class="p">]</span>    <span class="o">=</span> <span class="n">mdf</span><span class="p">[</span><span class="s1">'rain_anom_m'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">mdf</span><span class="p">[</span><span class="s1">'rain_anom_3m_lag'</span><span class="p">]</span> <span class="o">=</span> <span class="n">mdf</span><span class="p">[</span><span class="s1">'rain_anom_3m'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">mdf</span><span class="p">[</span><span class="s1">'cpi_yoy_lag'</span><span class="p">]</span>      <span class="o">=</span> <span class="n">mdf</span><span class="p">[</span><span class="s1">'cpi_yoy'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">mdf</span><span class="p">[</span><span class="s1">'gdp_yoy_lag'</span><span class="p">]</span>      <span class="o">=</span> <span class="n">mdf</span><span class="p">[</span><span class="s1">'gdp_yoy'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>     <span class="c1"># add extra shift if you model publish lag</span>
+<span class="n">mdf</span><span class="p">[</span><span class="s1">'repo_chg_lag'</span><span class="p">]</span>     <span class="o">=</span> <span class="n">mdf</span><span class="p">[</span><span class="s1">'repo_chg_bps'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">mdf</span><span class="p">[</span><span class="s1">'excess_next_m'</span><span class="p">]</span>    <span class="o">=</span> <span class="n">mdf</span><span class="p">[</span><span class="s1">'excess_ret'</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="n">mdf</span> <span class="o">=</span> <span class="n">mdf</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">how</span><span class="o">=</span><span class="s1">'any'</span><span class="p">)</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"[FINAL] Monthly rows:"</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">mdf</span><span class="p">),</span> <span class="s2">"|"</span><span class="p">,</span> <span class="n">mdf</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">(),</span> <span class="s2">"→"</span><span class="p">,</span> <span class="n">mdf</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">date</span><span class="p">())</span>
+
+<span class="c1"># -----------------------------</span>
+<span class="c1"># 8) Save</span>
+<span class="c1"># -----------------------------</span>
+<span class="n">out_csv</span>  <span class="o">=</span> <span class="n">PROC</span><span class="o">/</span><span class="s1">'monthly_features.csv'</span>
+<span class="n">out_parq</span> <span class="o">=</span> <span class="n">PROC</span><span class="o">/</span><span class="s1">'monthly_features.parquet'</span>
+
+<span class="n">mdf</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">out_csv</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">engine</span> <span class="o">=</span> <span class="n">PARQUET_ENGINE</span> <span class="k">if</span> <span class="n">PARQUET_ENGINE</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="n">mdf</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="n">out_parq</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">engine</span><span class="o">=</span><span class="n">engine</span><span class="p">)</span> <span class="k">if</span> <span class="n">engine</span> <span class="k">else</span> <span class="n">mdf</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="n">out_parq</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[warn] Could not save parquet: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Saved:"</span><span class="p">,</span> <span class="n">out_csv</span><span class="o">.</span><span class="n">resolve</span><span class="p">(),</span> <span class="s2">"and"</span><span class="p">,</span> <span class="n">out_parq</span><span class="o">.</span><span class="n">resolve</span><span class="p">())</span>
+
+<span class="c1"># Optional: quick peek</span>
+<span class="n">display</span><span class="p">(</span><span class="n">mdf</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">6</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>[smart_parse_dates] picked: infer | parsed=188 | med months/yr=12 | unique months=12
+[smart_parse_dates] picked: infer | parsed=188 | med months/yr=12 | unique months=12
+[IDX] Months: 187 | Range: 2010-01-31 → 2025-08-31
+[smart_parse_dates] picked: infer | parsed=150 | med months/yr=12 | unique months=12
+[CPI] Monthly points: 150 | YoY non-NaN: 138
+[GDP] Q points: 50 | expanded monthly points: 150 | sample: 2013-01-31 → 2025-06-30
+[smart_parse_dates] picked: infer | parsed=188 | med months/yr=12 | unique months=12
+[REPO] Months: 188 | Range: 2010-01-31 → 2025-08-31
+[RAIN] picks → Year=year, Month=month, Obs=rainfall_mm, Norm=good_rainfall_mm
+[RAIN] NaN check → total: 168 | non-NaN: 0 | unique years: 14 | range: 2012-01-31 → 2025-12-31
+
+--- Coverage before join ---
+[excess_ret  ] non-NaN= 187 | 2010-02-28 → 2025-08-31
+[midcap_mret ] non-NaN= 187 | 2010-02-28 → 2025-08-31
+[nifty_mret  ] non-NaN= 187 | 2010-02-28 → 2025-08-31
+[cpi_yoy     ] non-NaN= 138 | 2014-01-31 → 2025-06-30
+[gdp_yoy     ] non-NaN= 150 | 2013-01-31 → 2025-06-30
+[repo_pct    ] non-NaN= 188 | 2010-01-31 → 2025-08-31
+[repo_chg_bps] non-NaN= 187 | 2010-02-28 → 2025-08-31
+[rain_anom_m ] non-NaN=   0 | — → —
+[rain_anom_3m] non-NaN=   0 | — → —
+----------------------------
+
+[FINAL] Monthly rows: 0 | NaT → NaT
+Saved: C:\Users\abpanick\OneDrive - Microsoft\Documents\GitHub\marketpredict\processed\monthly_features.csv and C:\Users\abpanick\OneDrive - Microsoft\Documents\GitHub\marketpredict\processed\monthly_features.parquet
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedHTMLCommon jp-RenderedHTML jp-OutputArea-output" data-mime-type="text/html" tabindex="0">
+<div>
+<style scoped="">
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+<thead>
+<tr style="text-align: right;">
+<th></th>
+<th>excess_ret</th>
+<th>midcap_mret</th>
+<th>nifty_mret</th>
+<th>cpi_yoy</th>
+<th>gdp_yoy</th>
+<th>repo_pct</th>
+<th>repo_chg_bps</th>
+<th>rain_anom_m</th>
+<th>rain_anom_3m</th>
+<th>ret_prev_m</th>
+<th>rain_anom_lag</th>
+<th>rain_anom_3m_lag</th>
+<th>cpi_yoy_lag</th>
+<th>gdp_yoy_lag</th>
+<th>repo_chg_lag</th>
+<th>excess_next_m</th>
+</tr>
+<tr>
+<th>date_m</th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>
+<span class="ansi-red-intense-fg ansi-bold">The Kernel crashed while executing code in the current cell or a previous cell. 
+</span>
+<span class="ansi-red-intense-fg ansi-bold">Please review the code in the cell(s) to identify a possible cause of the failure. 
+</span>
+<span class="ansi-red-intense-fg ansi-bold">Click &lt;a href='https://aka.ms/vscodeJupyterKernelCrash'&gt;here&lt;/a&gt; for more info. 
+</span>
+<span class="ansi-red-intense-fg ansi-bold">View Jupyter &lt;a href='command:jupyter.viewOutput'&gt;log&lt;/a&gt; for further details.</span></pre>
 </div>
 </div>
 </div>
