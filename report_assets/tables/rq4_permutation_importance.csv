@@ -1,0 +1,12 @@
+feature,mean,std,count
+cpi_yoy_diff,0.0,,1
+cpi_yoy_lag1,0.0,,1
+excess_ret_lag1,0.0,,1
+excess_ret_ma4,0.0,,1
+gdp_yoy_diff,0.0,,1
+gdp_yoy_lag1,0.0,,1
+q_cos,0.0,,1
+q_sin,0.0,,1
+rain_anom_diff,0.0,,1
+rain_anom_lag1,0.0,,1
+repo_chg_bps_lag1,0.0,,1

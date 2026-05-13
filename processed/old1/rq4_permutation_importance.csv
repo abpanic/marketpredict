@@ -1,0 +1,15 @@
+feature,importance_mean,importance_std,model,sample,base_holdout_rmse,base_holdout_directional_accuracy
+lag_rain_anom_1q,1.075272,0.696054,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+lag_gdp_yoy_1q,0.292753,0.357151,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+lag_excess_ret_1q,0.281354,0.185004,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+lag_cpi_yoy_1q,0.272848,0.462473,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+rain_anom,0.156427,0.215085,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+repo,0.019070,0.018322,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+lag_repo_chg_bps_1q,0.018388,0.033367,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+poor_monsoon_flag,0.017490,0.041186,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+lag_excess_ret_2q,0.003527,0.007770,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+repo_chg_bps,0.000000,0.000000,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+good_monsoon_flag,0.000000,0.000000,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+normal_monsoon_flag,-0.025447,0.019285,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+cpi_yoy,-0.059974,0.206124,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000
+gdp_yoy,-0.100674,0.075398,GradientBoostingRegressor,chronological_holdout,5.121331,0.625000

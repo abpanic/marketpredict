@@ -1,0 +1,9 @@
+model,sample,n_obs,n_features,rmse,mae,r2,directional_accuracy
+Lagged_Enriched_Ridge,chronological_holdout,8,5,6.045613,5.059937,-0.629912,0.750000
+Momentum_Linear,chronological_holdout,8,1,6.276745,5.234560,-0.756921,0.750000
+Core_Enriched_RandomForest,chronological_holdout,8,5,6.632440,5.676120,-0.961688,0.500000
+Core_Enriched_Ridge,chronological_holdout,8,5,7.586651,5.935238,-1.566750,0.500000
+Momentum_Linear,time_series_cv_oof,24,1,5.928516,5.019931,-0.162068,0.458333
+Core_Enriched_RandomForest,time_series_cv_oof,24,5,6.165725,5.242536,-0.256921,0.416667
+Core_Enriched_Ridge,time_series_cv_oof,24,5,8.702012,6.695499,-1.503680,0.541667
+Lagged_Enriched_Ridge,time_series_cv_oof,24,5,13.779541,8.545466,-5.277822,0.541667

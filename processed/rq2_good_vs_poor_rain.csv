@@ -1,0 +1,5 @@
+monsoon_group,n_quarters,avg_next_q_excess_ret,median_next_q_excess_ret,std_next_q_excess_ret,positive_rate,test,group_1,group_2,mean_difference_good_minus_poor,t_stat,p_value
+Good monsoon,13.000000,2.533529,-0.560000,5.102510,0.461538,,,,,,
+Poor monsoon,19.000000,1.870280,1.507313,4.396818,0.736842,,,,,,
+Normal monsoon,8.000000,-1.237367,-2.184376,6.928466,0.375000,,,,,,
+,,,,,,Welch t-test,Good monsoon,Poor monsoon,0.663249,0.381643,0.706187

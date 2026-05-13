@@ -1,0 +1,6 @@
+interpretation_note
+RQ1: The best holdout model by RMSE was Lagged_Enriched_Ridge with RMSE=6.0456 and directional accuracy=75.00%.
+The momentum benchmark reported RMSE=6.2767 and directional accuracy=75.00%.
+RQ2: Good monsoon quarters had average next-quarter excess return 2.5335; poor monsoon quarters had 1.8703.
+RQ3: The strongest rainfall-GDP specification was gdp_yoy_on_rain_anom with R²=0.0270.
+"RQ4: The top holdout permutation-importance variables were lag_rain_anom_1q, lag_gdp_yoy_1q, lag_excess_ret_1q."

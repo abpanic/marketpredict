@@ -1,0 +1,61 @@
+{
+    "notebook": "ModelBuilder3.0.ipynb",
+    "purpose": "Run MBA Finance study models and RQ-specific analysis using FeatureBuilder3.0 output.",
+    "input_file": "c:\\Users\\Local User\\Documents\\GitHub\\marketpredict\\processed\\quarterly_features_clean.csv",
+    "target_variable": "next_q_excess_ret",
+    "momentum_features": [
+        "lag_excess_ret_1q"
+    ],
+    "core_enriched_features": [
+        "lag_excess_ret_1q",
+        "cpi_yoy",
+        "gdp_yoy",
+        "repo_chg_bps",
+        "rain_anom"
+    ],
+    "lagged_enriched_features": [
+        "lag_excess_ret_1q",
+        "lag_cpi_yoy_1q",
+        "lag_gdp_yoy_1q",
+        "lag_repo_chg_bps_1q",
+        "lag_rain_anom_1q"
+    ],
+    "rq4_features": [
+        "lag_excess_ret_1q",
+        "lag_excess_ret_2q",
+        "cpi_yoy",
+        "gdp_yoy",
+        "repo",
+        "repo_chg_bps",
+        "rain_anom",
+        "lag_cpi_yoy_1q",
+        "lag_gdp_yoy_1q",
+        "lag_repo_chg_bps_1q",
+        "lag_rain_anom_1q",
+        "good_monsoon_flag",
+        "poor_monsoon_flag",
+        "normal_monsoon_flag"
+    ],
+    "created_at": "2026-05-10T23:17:15.331925",
+    "n_model_rows": 40,
+    "n_train_rows": 32,
+    "n_holdout_rows": 8,
+    "outputs": [
+        "rq1_metrics.csv",
+        "rq1_oof_predictions.csv",
+        "rq1_holdout_predictions.csv",
+        "rq2_good_vs_poor_rain.csv",
+        "rq3_rainfall_gdp_relationship.csv",
+        "rq3_gdp_predictions.csv",
+        "rq4_permutation_importance.csv",
+        "rq4_directional_allocation_detail.csv",
+        "rq4_directional_allocation_summary.csv",
+        "modelbuilder_missingness_summary.csv",
+        "modelbuilder_interpretation_notes.csv",
+        "results_for_slides.xlsx",
+        "charts/rq1_holdout_actual_vs_predicted.png",
+        "charts/rq2_return_by_monsoon_group.png",
+        "charts/rq3_rainfall_vs_gdp.png",
+        "charts/rq4_permutation_importance.png"
+    ]
+}

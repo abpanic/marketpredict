@@ -1,0 +1,17 @@
+column,missing_count,missing_rate
+quarter_end,0,0.0
+next_q_excess_ret,0,0.0
+cpi_yoy,0,0.0
+gdp_yoy,0,0.0
+good_monsoon_flag,0,0.0
+lag_cpi_yoy_1q,0,0.0
+lag_excess_ret_1q,0,0.0
+lag_excess_ret_2q,1,0.025
+lag_gdp_yoy_1q,0,0.0
+lag_rain_anom_1q,0,0.0
+lag_repo_chg_bps_1q,0,0.0
+normal_monsoon_flag,0,0.0
+poor_monsoon_flag,0,0.0
+rain_anom,0,0.0
+repo,0,0.0
+repo_chg_bps,0,0.0

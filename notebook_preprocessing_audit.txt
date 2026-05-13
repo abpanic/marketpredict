@@ -1,0 +1,1389 @@
+
+================================================================================
+FeatureBuilder2.0.ipynb
+
+--- CELL 3 ---
+# Build standardized, quarter-labeled CSVs for: excess_ret, cpi_yoy, gdp_yoy, repo (level), repo_chg_bps
+# and produce both OUTER and INNER merged files to inspect coverage/alignment.
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+RAW  = Path('./raw')            
+PROC = Path('./processed') 
+
+# ---------- Helpers (lite) ----------
+
+def _pick(df: pd.DataFrame, candidates) -> str | None:
+    for c in candidates:
+        if c in df.columns: 
+            return c
+    for col in df.columns:
+        for k in candidates:
+            if k.lower() in col.lower(): 
+                return col
+    return None
+
+def _smart_parse_dates(s: pd.Series) -> pd.Series:
+    s = s.astype(str)
+    attempts = [
+        ('infer',    pd.to_datetime(s, errors='coerce')),
+        ('dayfirst', pd.to_datetime(s, errors='coerce', dayfirst=True)),
+    ]
+    fmts = ['%d-%b-%Y','%d-%b-%y','%d/%m/%Y','%m/%d/%Y','%Y-%m-%d',
+            '%b %d, %Y','%d %b %Y','%b %Y','%m-%Y']
+    attempts += [(fmt, pd.to_datetime(s, format=fmt, errors='coerce')) for fmt in fmts]
+
+    def _score(dt):
+        ok = dt.dropna()
+        if ok.empty:
+            return (0, 0, 0)
+        ser = pd.Series(1, index=ok).sort_index()
+        by_year = ser.groupby(ser.index.year).apply(lambda x: len(pd.Index(x.index.month).unique()))
+        med_months = int(by_year.median()) if len(by_year) else 0
+        return (len(ok), med_months, len(pd.Index(ok.dt.month).unique()))
+
+    best_name, best_dt, _ = max(((n, d, _score(d)) for n, d in attempts), key=lambda t: t[2])
+    return best_dt
+
+def _parse_dates_in_df(df, date_col: str):
+    out = df.copy()
+    out[date_col] = _smart_parse_dates(out[date_col])
+    return out.dropna(subset=[date_col]).sort_values(date_col)
+
+def _monthly_to_quarter(series: pd.Series, how='mean'):
+    return series.resample('Q').mean() if how=='mean' else series.resample('Q').last()
+
+def _yoy_from_monthly(series: pd.Series) -> pd.Series:
+    return series.pct_change(12) * 100.0
+
+def _standardize_q_series(s: pd.Series, name: str) -> pd.DataFrame:
+    """Take a quarterly series indexed by quarter-end Timestamp and return a labeled DataFrame."""
+    s = s.dropna().copy()
+    # Normalize to calendar quarter-end timestamps
+    s.index = s.index.to_period('Q').to_timestamp('Q')
+    per = s.index.to_period('Q')
+    out = pd.DataFrame({
+        "quarter_end": s.index,
+        "year": per.year,
+        "quarter": per.quarter,
+        "quarter_label": [f"{y}-Q{q}" for y, q in zip(per.year, per.quarter)],
+        name: s.values
+    })
+    return out.drop_duplicates(subset=["quarter_end"]).sort_values("quarter_end")
+
+# ---------- CPI (monthly -> YoY monthly -> YoY quarterly) ----------
+cpi_raw = pd.read_csv(RAW / "CPI_Monthly_Jan_2013_to_Jun_2025.csv")
+c_date = _pick(cpi_raw, ('DATE','Date','Month','Period'))
+c_val  = _pick(cpi_raw, ('CPI','Index','Value','CPI_COMBINED_RAW2012_100'))
+if not c_date or not c_val:
+    raise KeyError("CPI: could not identify date/value columns.")
+
+cpi = _parse_dates_in_df(cpi_raw, c_date)
+cpi_index_m = cpi.set_index(c_date)[c_val].astype(float).asfreq('M', method='pad')
+cpi_yoy_m   = _yoy_from_monthly(cpi_index_m).rename('cpi_yoy_m')
+cpi_yoy_q   = _monthly_to_quarter(cpi_yoy_m, 'mean').rename('cpi_yoy')
+cpi_df = _standardize_q_series(cpi_yoy_q, "cpi_yoy")
+cpi_df.to_csv(PROC / "quarterly_cpi_yoy.csv", index=False)
+
+# ---------- GDP (quarterly levels -> YoY), fiscal-aware (Q-MAR) then normalized to calendar quarter-end stamps ----------
+gdp_raw = pd.read_csv(RAW / "GDP_Quarterly_2010_2025.csv").copy()
+gdp_raw['gdp_clean'] = pd.to_numeric(gdp_raw['gdp'].astype(str).str.replace(',', '', regex=False), errors='coerce')
+qstr_raw = gdp_raw['quarter'].astype(str).str.replace('.0','',regex=False)
+m = qstr_raw.str.extract(r'(?P<y>\d{4}).*?Q(?P<q>[1-4])')
+qstr = (m['y'].fillna('') + 'Q' + m['q'].fillna(''))
+valid = qstr.str.match(r'^\d{4}Q[1-4]$')
+q_end_fy = pd.PeriodIndex(qstr[valid], freq='Q-MAR').to_timestamp(how='end')
+gdp_level_fy = (pd.Series(gdp_raw.loc[valid,'gdp_clean'].values, index=q_end_fy)
+                  .dropna().sort_index().groupby(pd.Grouper(freq='Q')).last())
+gdp_yoy = gdp_level_fy.pct_change(4).mul(100.0).rename('gdp_yoy')
+gdp_df = _standardize_q_series(gdp_yoy, "gdp_yoy")
+gdp_df.to_csv(PROC / "quarterly_gdp_yoy.csv", index=False)
+
+# ---------- Repo (monthly -> quarter level %, and Δ bps) ----------
+repo_raw = pd.read_csv(RAW / "Repo_Rate_Monthly_2010_2025.csv")
+r_date = _pick(repo_raw, ['DATE','Date','Month','Period'])
+r_val  = _pick(repo_raw, ['REPO_RATE_PERCENT','Repo','Rate','Policy Rate','REPO','Value'])
+repo = _parse_dates_in_df(repo_raw, r_date)
+val = (repo[r_val].astype(str).str.replace('\u200b','',regex=False)
+                     .str.replace(',','',regex=False).str.replace('%','',regex=False).str.strip())
+val = pd.to_numeric(val, errors='coerce')
+if val.dropna().abs().median() < 1:
+    val = val * 100.0
+repo = repo.assign(val=val).dropna(subset=['val'])
+repo_m = (repo.set_index(r_date)['val'].to_period('M').to_timestamp('M').sort_index())
+repo_full_m = pd.date_range(repo_m.index.min(), repo_m.index.max(), freq='M')
+repo_m = repo_m.reindex(repo_full_m).ffill()
+repo_q = repo_m.resample('Q').last().rename('repo')
+repo_chg_bps = (repo_q.diff() * 100.0).rename('repo_chg_bps')
+repo_df = _standardize_q_series(repo_q, "repo")
+repo_chg_df = _standardize_q_series(repo_chg_bps, "repo_chg_bps")
+repo_df.to_csv(PROC / "quarterly_repo_level.csv", index=False)
+repo_chg_df.to_csv(PROC / "quarterly_repo_chg_bps.csv", index=False)
+
+# ---------- NIFTY & MIDCAP (daily -> quarter returns) ----------
+n50 = pd.read_csv(RAW / "Nifty50.csv")
+mid = pd.read_csv(RAW / "NIFTYMidcap100.csv")
+d_n50 = _pick(n50, ['Date','DATE','date']); p_n50 = _pick(n50, ['Price','Close','Adj Close','AdjClose','Last','PX_LAST'])
+d_mid = _pick(mid, ['Date','DATE','date']); p_mid = _pick(mid, ['Price','Close','Adj Close','AdjClose','Last','PX_LAST'])
+
+def _parse_prices(df, dcol, vcol):
+    out = _parse_dates_in_df(df, dcol)
+    out[vcol] = pd.to_numeric(out[vcol].astype(str).str.replace(',','',regex=False), errors='coerce')
+    return out.dropna(subset=[vcol])[[dcol, vcol]]
+
+n50p = _parse_prices(n50, d_n50, p_n50)
+midp = _parse_prices(mid, d_mid, p_mid)
+
+n50_q = n50p.set_index(d_n50)[p_n50].resample('Q').last()
+mid_q = midp.set_index(d_mid)[p_mid].resample('Q').last()
+
+nifty_qret  = n50_q.pct_change().rename('nifty_qret')
+midcap_qret = mid_q.pct_change().rename('midcap_qret')
+excess_ret  = (midcap_qret - nifty_qret).rename('excess_ret')
+
+nifty_df  = _standardize_q_series(nifty_qret,  "nifty_qret")
+midcap_df = _standardize_q_series(midcap_qret, "midcap_qret")
+excess_df = _standardize_q_series(excess_ret,  "excess_ret")
+
+nifty_df.to_csv(PROC / "quarterly_nifty_qret.csv", index=False)
+midcap_df.to_csv(PROC / "quarterly_midcap_qret.csv", index=False)
+excess_df.to_csv(PROC / "quarterly_excess_ret.csv", index=False)
+
+# ---------- Merged views (outer & inner) ----------
+key_cols = ["quarter_end","year","quarter","quarter_label"]
+dfs = [excess_df, cpi_df, gdp_df, repo_df, repo_chg_df]
+
+# Outer (union) merge on quarter_end, keeping all keys
+merged_outer = dfs[0]
+for d in dfs[1:]:
+    merged_outer = pd.merge(merged_outer, d, on=key_cols, how="outer")
+
+merged_outer = merged_outer.sort_values("quarter_end").reset_index(drop=True)
+merged_outer.to_csv(PROC / "quarterly_merged_outer.csv", index=False)
+
+# Inner (strict intersection)
+merged_inner = dfs[0]
+for d in dfs[1:]:
+    merged_inner = pd.merge(merged_inner, d, on=key_cols, how="inner")
+merged_inner = merged_inner.sort_values("quarter_end").reset_index(drop=True)
+merged_inner.to_csv(PROC / "quarterly_merged_intersection.csv", index=False)
+
+# Simple coverage summary for each series
+def _coverage(df, col):
+    nonnull = df[col].notna()
+    if nonnull.any():
+        idx = df.loc[nonnull, "quarter_label"]
+        return idx.iloc[0], idx.iloc[-1], int(nonnull.sum())
+    return None, None, 0
+
+coverage = {
+    "excess_ret": _coverage(merged_outer, "excess_ret"),
+    "cpi_yoy":    _coverage(merged_outer, "cpi_yoy"),
+    "gdp_yoy":    _coverage(merged_outer, "gdp_yoy"),
+    "repo":       _coverage(merged_outer, "repo"),
+    "repo_chg_bps": _coverage(merged_outer, "repo_chg_bps"),
+}
+
+coverage
+
+
+--- CELL 4 ---
+# Validate and finalize the rainfall processing on the uploaded CSV.
+# Load
+rain = pd.read_csv("raw/AnnualRainfall_with_Good_and_Anomaly_2012_2025.csv")
+
+# Columns expected
+ycol, mcol = 'year', 'month'
+obs_col, norm_col, mm_anom_col = 'rainfall_mm', 'good_rainfall_mm', 'anomaly_mm'
+
+missing_cols = [c for c in [ycol, mcol, obs_col, norm_col] if c not in rain.columns]
+assert not missing_cols, f"Missing columns in rainfall CSV: {missing_cols}. Have: {list(rain.columns)}"
+
+# Month text -> month number
+mmap = {m[:3].lower(): i for i, m in enumerate(
+    ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'], start=1)}
+
+rain['mon'] = rain[mcol].astype(str).str[:3].str.lower().map(mmap)
+
+# QA: detect any unknown month strings
+if rain['mon'].isna().any():
+    unk = rain.loc[rain['mon'].isna(), mcol].unique().tolist()
+    raise ValueError(f"Unrecognized month strings: {unk}")
+
+rain['mon'] = rain['mon'].astype(int)
+
+# Keep Southwest monsoon months: Jun–Sep
+mons = rain[rain['mon'].between(6, 9)].copy()
+
+# QA1: ensure each season has 4 months
+miss = (mons.groupby(ycol)['mon'].nunique().rename('monsoon_months').reset_index())
+bad = miss[miss['monsoon_months'] < 4]
+if not bad.empty:
+    print("⚠ Monsoon months missing in years:", bad[ycol].tolist())
+
+# Aggregate seasonal totals
+grp = mons.groupby(ycol, as_index=False).agg(
+    obs_mm  = (obs_col,  'sum'),
+    norm_mm = (norm_col, 'sum'),
+    anom_sum_mm = (mm_anom_col, 'sum')
+)
+
+# Guard against division by zero in norm
+grp.loc[grp['norm_mm'] == 0, 'norm_mm'] = np.nan
+
+# IMD-style anomaly %
+grp['rain_anom_pct'] = (grp['obs_mm'] - grp['norm_mm']) / grp['norm_mm'] * 100.0
+
+# Cross-check sign using anomaly_mm if provided as (good - observed)
+grp['alt_pct_from_file'] = (-grp['anom_sum_mm'] / grp['norm_mm']) * 100.0
+
+# Stamp each year's anomaly at Sep-30; forward-fill within quarters
+rain_idx = pd.to_datetime(grp[ycol].astype(int).astype(str) + '-09-30')
+rain_q = pd.Series(grp['rain_anom_pct'].values, index=rain_idx).resample('Q').ffill().rename('rain_anom')
+
+# Standardize to labeled DataFrame for joining
+per = rain_q.index.to_period('Q')
+rain_df = pd.DataFrame({
+    "quarter_end": rain_q.index.to_period('Q').to_timestamp('Q'),
+    "year": per.year,
+    "quarter": per.quarter,
+    "quarter_label": [f"{y}-Q{q}" for y, q in zip(per.year, per.quarter)],
+    "rain_anom": rain_q.values
+}).drop_duplicates(subset=["quarter_end"]).sort_values("quarter_end")
+
+# Save outputs
+out_season = grp.copy()
+out_season.to_csv("processed/rainfall_seasonal_totals.csv", index=False)
+rain_df.to_csv("processed/quarterly_rain_anom.csv", index=False)
+
+# Display quick previews
+print("Rainfall seasonal totals (QA)", out_season.head(6))
+print("Rainfall quarterly anomaly (head)", rain_df.head(12))
+print("Rainfall quarterly anomaly (tail)", rain_df.tail(12))
+
+print("Rainfall seasonal years covered:", grp[ycol].tolist())
+print("Rainfall quarterly points:", rain_q.shape[0], "| Range:", rain_q.index.min().date(), "→", rain_q.index.max().date())
+
+
+--- CELL 5 ---
+files = [
+  "quarterly_excess_ret.csv","quarterly_cpi_yoy.csv","quarterly_gdp_yoy.csv",
+  "quarterly_repo_level.csv","quarterly_repo_chg_bps.csv","quarterly_rain_anom.csv"
+]
+
+for fn in files:
+    df = pd.read_csv(PROC / fn, parse_dates=['quarter_end'])
+
+    # derive year/quarter from the quarter_end column
+    per = df['quarter_end'].dt.to_period('Q')          # Series[period[Q]]
+    y = per.dt.year.to_numpy()                          # <-- use .dt.year
+    q = per.dt.quarter.to_numpy()                       # <-- use .dt.quarter
+
+    # make sure the stored cols are ints (in case they were read as object)
+    df['year'] = pd.to_numeric(df['year'], errors='coerce').astype('Int64')
+    df['quarter'] = pd.to_numeric(df['quarter'], errors='coerce').astype('Int64')
+
+    # checks
+    assert (df['year'].to_numpy() == y).all(), f"{fn}: year mismatch"
+    assert (df['quarter'].to_numpy() == q).all(), f"{fn}: quarter mismatch"
+
+    expected_labels = pd.Series([f"{yy}-Q{qq}" for yy, qq in zip(y, q)], index=df.index)
+    assert (df['quarter_label'] == expected_labels).all(), f"{fn}: quarter_label mismatch"
+
+print("All quarter/year labels are consistent.")
+
+--- CELL 6 ---
+BASE = Path("./processed")
+
+# ---- helper to load a standardized quarterly CSV and return a Series ----
+def load_std_series(path: Path) -> pd.Series:
+    df = pd.read_csv(path, parse_dates=['quarter_end'])
+    key_cols = ["quarter_end","year","quarter","quarter_label"]
+    val_cols = [c for c in df.columns if c not in key_cols]
+    if len(val_cols) != 1:
+        raise ValueError(f"{path.name}: expected exactly 1 value column, found {val_cols}")
+    name = val_cols[0]
+    s = pd.Series(df[name].values, index=df['quarter_end']).rename(name)
+    # normalize to calendar quarter-end timestamps
+    s.index = s.index.to_period('Q').to_timestamp('Q')
+    return s
+
+# ---- load available series ----
+series_paths = {
+    "excess_ret": BASE / "quarterly_excess_ret.csv",
+    "cpi_yoy": BASE / "quarterly_cpi_yoy.csv",
+    "gdp_yoy": BASE / "quarterly_gdp_yoy.csv",
+    "repo": BASE / "quarterly_repo_level.csv",
+    "repo_chg_bps": BASE / "quarterly_repo_chg_bps.csv",
+    "rain_anom": BASE / "quarterly_rain_anom.csv",  
+}
+
+series = {}
+missing = []
+for k, p in series_paths.items():
+    try:
+        series[k] = load_std_series(p)
+    except FileNotFoundError:
+        missing.append(k)
+    except Exception as e:
+        print(f"⚠ Issue loading {k} from {p.name}: {e}")
+        missing.append(k)
+
+if missing:
+    print("Note: Missing series not used in modeling:", missing)
+
+# ---- merge into a single DataFrame (inner join on intersection) ----
+df_all = pd.concat(series.values(), axis=1, join='inner').sort_index()
+df_all.index.name = "quarter_end"
+# carry forward rainfall across Q3→next Q2 already done during build; we just keep as-is
+# Quick summary
+print("Merged intersection rows:", df_all.shape[0], "| range:", df_all.index.min().date(), "→", df_all.index.max().date())
+print("Columns:", list(df_all.columns))
+
+# Save the base merged file for reference
+df_all_out = df_all.copy()
+df_all_out["year"] = df_all_out.index.to_period('Q').year
+df_all_out["quarter"] = df_all_out.index.to_period('Q').quarter
+df_all_out["quarter_label"] = [f"{y}-Q{q}" for y, q in zip(df_all_out["year"], df_all_out["quarter"])]
+df_all_out.reset_index().to_csv(BASE / "quarterly_merged_for_modeling.csv", index=False)
+
+# ---- Option A: Nowcast next quarter with current-quarter info ----
+dfa = df_all.copy()
+dfa["ret_prev_q"]      = dfa["excess_ret"].shift(1)       # baseline feature
+# keep contemporaneous macro info (current quarter)
+# (if some series are missing from 'series', skip them gracefully)
+feat_cols_A = ["ret_prev_q"]
+for col in ["cpi_yoy","gdp_yoy","repo_chg_bps","rain_anom"]:
+    if col in dfa.columns:
+        # contemporaneous variables for quarter t
+        dfa[col + "_cur"] = dfa[col]
+        feat_cols_A.append(col + "_cur")
+
+dfa["excess_next_q"] = dfa["excess_ret"].shift(-1)        # target at t+1
+
+dfa_model = dfa[feat_cols_A + ["excess_next_q"]].dropna().copy()
+dfa_model.index.name = "quarter_end"
+dfa_model.reset_index().to_csv(BASE / "modeling_nowcast_optionA.csv", index=False)
+
+print("\nOption A (nowcast) rows:", dfa_model.shape[0], "| features:", feat_cols_A)
+
+# ---- Add small, readable previews for both designs ----
+print("Modeling dataset (Option A, head)", dfa_model.reset_index().head(10))
+
+# ---- Create CV fold summaries (expanding window) for each design ----
+def make_expanding_cv(index, min_train=24, test_size=2, step=2):
+    """
+    index: DatetimeIndex (quarter_end) sorted.
+    Returns a DataFrame with fold_id, train_start, train_end, test_start, test_end.
+    """
+    idx = pd.Index(index)  # ensure index
+    n = len(idx)
+    folds = []
+    train_end = min_train
+    fold_id = 1
+    while train_end < n:
+        test_end = min(train_end + test_size, n)
+        if test_end - train_end <= 0:
+            break
+        folds.append({
+            "fold_id": fold_id,
+            "train_start": idx[0].date(),
+            "train_end": idx[train_end-1].date(),
+            "test_start": idx[train_end].date(),
+            "test_end": idx[test_end-1].date()
+        })
+        fold_id += 1
+        train_end += step
+    return pd.DataFrame(folds)
+folds_A = make_expanding_cv(dfa_model.index, min_train=24, test_size=2, step=2)
+folds_A.to_csv(BASE / "cv_folds_nowcast_optionA.csv", index=False)
+print("CV folds (Option A summary)", folds_A.head(10))
+
+
+print("\nSaved:")
+print("quarterly_merged_for_modeling_optionA.csv")
+print("modeling_nowcast_optionA.csv")
+print("cv_folds_nowcast_optionA.csv")
+
+--- CELL 7 ---
+# =======================
+# FEATUREBUILDER: SAVE ARTIFACTS (STANDARDIZED)
+# =======================
+from pathlib import Path
+import pandas as pd
+
+PROC = Path("./processed")
+PROC.mkdir(exist_ok=True)
+
+# qdf_final should be your final quarterly feature table,
+# indexed by quarter-end dates (DatetimeIndex), with these key columns at minimum:
+#   midcap_qret, nifty_qret, excess_ret, rain_anom, cpi_yoy, gdp_yoy, repo_chg_bps,
+#   ret_prev_q, rain_anom_lag, cpi_yoy_lag, gdp_yoy_lag, repo_chg_lag, excess_next_q
+
+assert isinstance(dfa_model.index, pd.DatetimeIndex), "qdf_final must be indexed by datetime (quarter-ends)"
+out = dfa_model.copy()
+out = out.sort_index()
+out["date_q"] = out.index
+cols = ["date_q"] + [c for c in out.columns if c != "date_q"]
+out = out[cols]
+
+# Save canonical files
+csv_path = PROC / "quarterly_features.csv"
+parq_path = PROC / "quarterly_features.parquet"
+out.to_csv(csv_path, index=False, float_format="%.6f")
+out.set_index("date_q").to_parquet(parq_path)
+
+print("Saved:")
+print(" -", csv_path.resolve())
+print(" -", parq_path.resolve())
+
+# (Optional) legacy alias for older ModelBuilder versions
+legacy_csv = PROC / "quarterly_features_clean.csv"
+out.to_csv(legacy_csv, index=False, float_format="%.6f")
+print("Also wrote legacy copy:", legacy_csv.resolve())
+
+================================================================================
+ModelBuilder2.0.ipynb
+
+--- CELL 1 ---
+# ==== Model Builder (Option A: intersection join, t+1 target) ====
+# Dependencies
+import warnings, math, os
+from pathlib import Path
+import pandas as pd, numpy as np
+
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.linear_model import Ridge, Lasso, LinearRegression
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+
+import joblib
+
+# ---- paths ----
+
+PROC = Path("./processed") 
+OUT  = Path("./models")
+
+warnings.filterwarnings("ignore")
+
+# ---- helpers ----
+META_COLS = {"quarter_end","year","quarter","quarter_label"}
+
+def _pick_value_col(df: pd.DataFrame) -> str:
+    """
+    From a standardized processed CSV (with metadata columns present),
+    return the single *numeric* series column to use as the value.
+    """
+    candidates = [c for c in df.columns if c not in META_COLS]
+    # Prefer the one that is most numeric
+    best, best_non_na = None, -1
+    for c in candidates:
+        num = pd.to_numeric(df[c], errors="coerce")
+        non_na = int(num.notna().sum())
+        if non_na > best_non_na:
+            best, best_non_na = c, non_na
+    if best is None:
+        raise ValueError("Could not find a numeric value column.")
+    return best
+
+def load_series(proc_filename: str, rename_to: str) -> pd.Series:
+    """Load a processed CSV and return a numeric Series indexed by quarter_end."""
+    df = pd.read_csv(PROC / proc_filename, parse_dates=["quarter_end"])
+    vcol = _pick_value_col(df)
+    ser = (pd.to_numeric(df[vcol], errors="coerce")
+             .rename(rename_to)
+             .set_axis(df["quarter_end"]))
+    # If duplicates exist per quarter_end (shouldn't), take last
+    ser = ser.groupby(ser.index).last().sort_index()
+    return ser
+
+def rmspe(y, yhat):
+    mask = y != 0
+    if mask.any():
+        return math.sqrt(np.mean(((yhat[mask] - y[mask]) / y[mask])**2)) * 100
+    return np.nan
+
+def print_metrics(y_true, y_pred, label=""):
+    rmse = mean_squared_error(y_true, y_pred, squared=False)
+    mae  = mean_absolute_error(y_true, y_pred)
+    r2   = r2_score(y_true, y_pred)
+    mape = np.mean(np.abs((y_pred - y_true) / np.where(y_true==0, np.nan, y_true))) * 100
+    print(f"{label}RMSE={rmse:6.3f} | MAE={mae:6.3f} | R2={r2:6.3f} | MAPE={mape:6.2f}%")
+
+# ---- load all series ----
+series_map = {
+    "quarterly_excess_ret.csv" : "excess_ret",
+    "quarterly_cpi_yoy.csv"    : "cpi_yoy",
+    "quarterly_gdp_yoy.csv"    : "gdp_yoy",
+    "quarterly_repo_level.csv" : "repo",
+    "quarterly_repo_chg_bps.csv":"repo_chg_bps",
+    "quarterly_rain_anom.csv"  : "rain_anom",
+}
+
+loaded = {}
+missing_files = []
+for fn, name in series_map.items():
+    path = PROC / fn
+    if not path.exists():
+        missing_files.append(fn)
+        continue
+    loaded[name] = load_series(fn, name)
+
+if missing_files:
+    print("⚠ Missing files (skipped):", missing_files)
+
+if not loaded:
+    raise RuntimeError("No series loaded. Check PROC path & filenames.")
+
+# ---- inner-join on common quarters ----
+df = pd.concat(loaded.values(), axis=1, join="inner").sort_index()
+df.index.name = "quarter_end"
+
+# quick QA
+print("Data coverage:", df.index.min().date(), "→", df.index.max().date(), "| rows:", df.shape[0])
+print(df.tail(3))
+
+# ---- target: next-quarter excess return ----
+# We predict T+1 excess_ret using features at time T (no leakage).
+df["target_excess_ret_next"] = df["excess_ret"].shift(-1)
+
+# ---- simple feature engineering knobs (easy to tweak) ----
+# add modest lags to economic features to reflect reporting delays.
+LAGS = {
+    # 'cpi_yoy': 1,
+    # 'gdp_yoy': 1,
+    # 'repo': 0,
+    # 'repo_chg_bps': 0,
+    # 'rain_anom': 0,
+}
+for col, lag in LAGS.items():
+    if col in df.columns and lag:
+        df[f"{col}_lag{lag}"] = df[col].shift(lag)
+
+# Quarter-of-year encodings (cyclical)
+per = df.index.to_period("Q")
+q_num = per.quarter
+df["q_sin"] = np.sin(2*np.pi*(q_num/4.0))
+df["q_cos"] = np.cos(2*np.pi*(q_num/4.0))
+
+# Momentum of the spread 
+df["excess_ret_lag1"] = df["excess_ret"].shift(1)
+df["excess_ret_ma4"]  = df["excess_ret"].rolling(4).mean()
+
+# ---- finalize features/labels ----
+feature_cols = [c for c in df.columns if c not in {"target_excess_ret_next"}]
+feature_cols = [c for c in feature_cols if not c.startswith("excess_ret")] + ["excess_ret_lag1","excess_ret_ma4","q_sin","q_cos"]
+feature_cols = [c for c in feature_cols if c in df.columns]
+feature_cols = list(dict.fromkeys(feature_cols))  # keep order, drop dups
+
+#  for repo_chg_bps, dropping raw 'repo' level to reduce redundancy:
+if "repo" in feature_cols and "repo_chg_bps" in feature_cols:
+    feature_cols.remove("repo")
+
+# Re-create X,y cleanly
+X = df[feature_cols]
+y = df["target_excess_ret_next"]
+data = pd.concat([X, y], axis=1).dropna()
+X = data[feature_cols]
+y = data["target_excess_ret_next"]
+
+print("Final features:", feature_cols)
+print("Rows after cleanup:", len(X))
+
+# ---- time-series CV setup ----
+# Use expanding-window folds; last fold acts like a recent out-of-sample.
+n_splits = 5 if len(data) >= 40 else max(3, len(data)//10)  # heuristic to avoid tiny folds
+tscv = TimeSeriesSplit(n_splits=n_splits)
+
+# ---- candidate models ----
+candidates = {
+    "ridge": Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", Ridge(alpha=3.0, random_state=42)),
+    ]),
+    "lasso": Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", Lasso(alpha=0.01, random_state=42, max_iter=5000)),
+    ]),
+    "gbr": Pipeline([
+        ("scaler", StandardScaler(with_mean=True, with_std=True)),
+        ("model", GradientBoostingRegressor(random_state=42,
+                                            n_estimators=600,
+                                            learning_rate=0.03,
+                                            max_depth=3,
+                                            subsample=0.9)),
+    ]),
+    "rf": Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", RandomForestRegressor(random_state=42,
+                                        n_estimators=500,
+                                        max_depth=None,
+                                        min_samples_leaf=2))
+    ]),
+}
+
+# ---- backtest & model selection ----
+cv_rows = []
+scores = []
+for name, pipe in candidates.items():
+    y_pred_full = pd.Series(index=y.index, dtype=float)
+    fold_no = 0
+    for train_idx, test_idx in tscv.split(X):
+        fold_no += 1
+        X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
+        y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
+
+        pipe.fit(X_tr, y_tr)
+        y_hat = pd.Series(pipe.predict(X_te), index=y_te.index)
+
+        # store per-fold predictions for later inspection
+        y_pred_full.loc[y_te.index] = y_hat
+
+        # metrics
+        rmse = mean_squared_error(y_te, y_hat, squared=False)
+        mae  = mean_absolute_error(y_te, y_hat)
+        r2   = r2_score(y_te, y_hat)
+        cv_rows.append({
+            "model": name, "fold": fold_no, "start": X_te.index.min(), "end": X_te.index.max(),
+            "rmse": rmse, "mae": mae, "r2": r2
+        })
+
+    # summarize per model
+    valid_mask = y_pred_full.notna()
+    rmse = mean_squared_error(y[valid_mask], y_pred_full[valid_mask], squared=False)
+    mae  = mean_absolute_error(y[valid_mask], y_pred_full[valid_mask])
+    r2   = r2_score(y[valid_mask], y_pred_full[valid_mask])
+    scores.append((name, rmse, mae, r2))
+    print_metrics(y[valid_mask], y_pred_full[valid_mask], label=f"[{name}] ")
+
+cv_df = pd.DataFrame(cv_rows).sort_values(["model","fold"])
+cv_df.to_csv(OUT/"cv_folds_metrics.csv", index=False)
+
+scores_df = pd.DataFrame(scores, columns=["model","rmse","mae","r2"]).sort_values("rmse")
+print("\n=== CV Summary (lower RMSE is better) ===")
+print(scores_df)
+
+best_name = scores_df.iloc[0]["model"]
+best_pipe = candidates[best_name]
+print(f"\nSelected model: {best_name}")
+
+# ---- refit best on ALL data & save artifacts ----
+best_pipe.fit(X, y)
+joblib.dump({
+    "pipeline": best_pipe,
+    "feature_cols": feature_cols,
+    "index": X.index,
+    "meta": {
+        "target": "target_excess_ret_next",
+        "option": "A_inner_join_nextQ",
+        "n_splits": n_splits
+    }
+}, OUT/"best_model.joblib")
+
+# ---- full in-sample fitted vs actual & last-available forecast ----
+fitted = pd.Series(best_pipe.predict(X), index=y.index, name="y_hat")
+fit_df = pd.DataFrame({"y_true": y, "y_hat": fitted})
+fit_df.to_csv(OUT/"fitted_vs_actual.csv")
+
+# if you want a “true” next-quarter forecast using the most recent row:
+latest_x = X.iloc[[-1]]
+latest_quarter = latest_x.index[0]
+nextq_pred = float(best_pipe.predict(latest_x))
+print(f"\nLatest available quarter = {latest_quarter.date()}  →  predicted next-Q excess_ret = {nextq_pred:.4f}")
+with open(OUT/"latest_forecast.txt","w") as f:
+    f.write(f"{latest_quarter.date()},{nextq_pred:.6f}\n")
+
+# ---- convenience: export the final training frame ----
+data.to_csv(OUT/"model_dataset.csv", index=True)  # index = quarter_end
+print(f"\nArtifacts written to: {OUT.resolve()}")
+
+
+# --- baselines ---
+n_splits = 5 if len(X) >= 40 else max(3, len(X)//10)
+
+def eval_cv(estimator, X, y, n_splits=5):
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    preds = pd.Series(index=y.index, dtype=float)
+    rows = []
+    for k,(tr,te) in enumerate(tscv.split(X),1):
+        Xtr,Xte,ytr,yte = X.iloc[tr],X.iloc[te],y.iloc[tr],y.iloc[te]
+        estimator.fit(Xtr,ytr)
+        p = pd.Series(estimator.predict(Xte), index=yte.index)
+        preds.loc[yte.index] = p
+        rows.append({
+            "fold":k,
+            "start":Xte.index.min().date(),
+            "end":Xte.index.max().date(),
+            "rmse":mean_squared_error(yte,p,squared=False),
+            "mae": mean_absolute_error(yte,p),
+            "r2":  r2_score(yte,p)
+        })
+    # ---- FIX: drop rows that were never in any test set
+    valid = preds.notna()
+    summary = {
+        "rmse": mean_squared_error(y[valid], preds[valid], squared=False),
+        "mae":  mean_absolute_error(y[valid], preds[valid]),
+        "r2":   r2_score(y[valid], preds[valid]),
+    }
+    return pd.DataFrame(rows), pd.Series(summary), preds
+
+def baseline_mean(X, y, n_splits=5):
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    preds = pd.Series(index=y.index, dtype=float)
+    rows = []
+    for k,(tr,te) in enumerate(tscv.split(X),1):
+        ytr,yte = y.iloc[tr], y.iloc[te]
+        mu = ytr.mean()
+        p = pd.Series(mu, index=yte.index)
+        preds.loc[yte.index] = p
+        rows.append({
+            "fold":k,
+            "start":X.index[te].min().date(),
+            "end":X.index[te].max().date(),
+            "rmse":mean_squared_error(yte,p,squared=False),
+            "mae": mean_absolute_error(yte,p),
+            "r2":  r2_score(yte,p)
+        })
+    # ---- FIX: drop rows that were never in any test set
+    valid = preds.notna()
+    summary = {
+        "rmse": mean_squared_error(y[valid], preds[valid], squared=False),
+        "mae":  mean_absolute_error(y[valid], preds[valid]),
+        "r2":   r2_score(y[valid], preds[valid]),
+    }
+    return pd.DataFrame(rows), pd.Series(summary), preds
+
+--- CELL 2 ---
+# --- Build CV benchmarks (models + baselines) and save tidy tables
+def eval_cv(estimator, X, y, n_splits=5):
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    preds = pd.Series(index=y.index, dtype=float); rows=[]
+    for k,(tr,te) in enumerate(tscv.split(X),1):
+        Xtr,Xte,ytr,yte = X.iloc[tr],X.iloc[te],y.iloc[tr],y.iloc[te]
+        estimator.fit(Xtr,ytr)
+        p = pd.Series(estimator.predict(Xte), index=yte.index)
+        preds.loc[yte.index] = p
+        rows.append({"fold":k,
+                     "start":Xte.index.min().date(),"end":Xte.index.max().date(),
+                     "rmse":mean_squared_error(yte,p,squared=False),
+                     "mae":mean_absolute_error(yte,p),
+                     "r2":r2_score(yte,p)})
+    valid = preds.notna()
+    summary = {
+        "rmse":mean_squared_error(y[valid],preds[valid],squared=False),
+        "mae":mean_absolute_error(y[valid],preds[valid]),
+        "r2":r2_score(y[valid],preds[valid]),
+    }
+    return pd.DataFrame(rows), pd.Series(summary), preds
+
+def baseline_mean(X, y, n_splits=5):
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    preds = pd.Series(index=y.index, dtype=float); rows=[]
+    for k,(tr,te) in enumerate(tscv.split(X),1):
+        ytr,yte = y.iloc[tr], y.iloc[te]
+        mu = ytr.mean()
+        p = pd.Series(mu, index=yte.index)
+        preds.loc[yte.index] = p
+        rows.append({"fold":k,
+                     "start":X.index[te].min().date(),"end":X.index[te].max().date(),
+                     "rmse":mean_squared_error(yte,p,squared=False),
+                     "mae":mean_absolute_error(yte,p),
+                     "r2":r2_score(yte,p)})
+    valid = preds.notna()
+    summary = {
+        "rmse":mean_squared_error(y[valid],preds[valid],squared=False),
+        "mae":mean_absolute_error(y[valid],preds[valid]),
+        "r2":r2_score(y[valid],preds[valid]),
+    }
+    return pd.DataFrame(rows), pd.Series(summary), preds
+
+n_splits = 5 if len(X) >= 40 else max(3, len(X)//10)
+
+# Baselines
+bmean_folds, bmean_sum, bmean_pred = baseline_mean(X, y, n_splits)
+blag_folds, blag_sum, blag_pred   = eval_cv(LinearRegression(), X[["excess_ret_lag1"]], y, n_splits)
+
+# Reuse your 'candidates' dict from above
+rows, summary = [], []
+preds = {"baseline_mean": bmean_pred, "baseline_lag1": blag_pred}
+
+for name, est in candidates.items():
+    f, s, p = eval_cv(est, X, y, n_splits)
+    f.insert(0,"model",name); rows.append(f)
+    summary.append({"model":name, **s.to_dict()})
+    preds[name] = p
+
+cv_folds_df = pd.concat(rows, ignore_index=True)
+cv_summary_df = pd.concat([
+    pd.DataFrame(summary),
+    pd.DataFrame([{"model":"baseline_mean", **bmean_sum.to_dict()}]),
+    pd.DataFrame([{"model":"baseline_lag1", **blag_sum.to_dict()}]),
+], ignore_index=True).sort_values("rmse")
+
+pd.DataFrame({"y_true":y, **preds}).to_csv(OUT/"cv_predictions_w_baselines.csv")
+cv_summary_df.to_csv(OUT/"cv_summary_models_vs_baselines.csv", index=False)
+cv_folds_df.to_csv(OUT/"cv_folds_metrics_detailed.csv", index=False)
+
+print("Saved:")
+print(" -", OUT/"cv_summary_models_vs_baselines.csv")
+print(" -", OUT/"cv_folds_metrics_detailed.csv")
+print(" -", OUT/"cv_predictions_w_baselines.csv")
+
+
+--- CELL 4 ---
+from sklearn.inspection import permutation_importance
+
+best_row = cv_summary_df[~cv_summary_df["model"].isin(["baseline_mean","baseline_lag1"])].iloc[0]
+best_name = best_row["model"]
+best_est  = candidates[best_name]
+
+h = 6 if len(X) > 10 else max(2, len(X)//5)  # ~1.5 years as holdout
+X_tr, y_tr = X.iloc[:-h], y.iloc[:-h]
+X_te, y_te = X.iloc[-h:],  y.iloc[-h:]
+
+best_est.fit(X_tr, y_tr)
+perm = permutation_importance(best_est, X_te, y_te,
+                              n_repeats=200, random_state=42,
+                              scoring="neg_root_mean_squared_error")
+imp_df = (pd.DataFrame({"feature":X.columns, "importance":perm.importances_mean})
+            .sort_values("importance", ascending=False))
+imp_df.to_csv(OUT/"permutation_importance_holdout.csv", index=False)
+imp_df.head(10)
+
+--- CELL 7 ---
+corr = pd.concat([X, y.rename("target_next")], axis=1).corr(numeric_only=True)
+corr.to_csv(OUT/"corr_matrix_for_slide.csv")
+corr.round(2)
+
+--- CELL 9 ---
+def run_cv_rmse(est, X, y, n_splits):
+    _, s, _ = eval_cv(est, X, y, n_splits)
+    return s["rmse"]
+
+mom_cols   = ["excess_ret_lag1","excess_ret_ma4","q_sin","q_cos"]
+macro_cols = [c for c in feature_cols if c not in mom_cols]
+
+est = Pipeline([("scaler",StandardScaler()),
+                ("model",RandomForestRegressor(random_state=42,n_estimators=500,min_samples_leaf=2))])
+
+rmse_mom   = run_cv_rmse(est, X[mom_cols], y, n_splits)
+rmse_full  = run_cv_rmse(est, X[mom_cols + macro_cols], y, n_splits)
+
+ablation = pd.DataFrame({
+    "spec":["Momentum only","Momentum + Macro"],
+    "rmse":[rmse_mom, rmse_full]
+})
+ablation.to_csv(OUT/"ablation_momentum_vs_macro.csv", index=False)
+ablation
+
+
+--- CELL 11 ---
+# =========================================
+# Cell 1 — Imports & paths
+# =========================================
+import os, sys, textwrap, json, warnings, math
+from pathlib import Path
+warnings.filterwarnings("ignore")
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Try optional libs (nice-to-haves; code still works without them)
+try:
+    import sklearn
+    from sklearn.metrics import (
+        roc_curve, auc, precision_recall_curve, average_precision_score,
+        confusion_matrix, r2_score, mean_squared_error, mean_absolute_error
+    )
+except Exception:
+    sklearn = None
+
+try:
+    import scipy
+    from scipy import stats
+except Exception:
+    scipy = None
+
+# dataframe_image can export styled DataFrames to PNG; optional
+try:
+    import dataframe_image as dfi
+except Exception:
+    dfi = None
+
+# Where to search for your uploaded files
+SEARCH_DIRS = [Path.cwd(), Path("./processed/")]
+
+# Output folders
+OUT_ROOT   = Path("report_assets")
+OUT_TABLES = OUT_ROOT / "tables"
+OUT_CHARTS = OUT_ROOT / "charts"
+for p in [OUT_ROOT, OUT_TABLES, OUT_CHARTS]:
+    p.mkdir(parents=True, exist_ok=True)
+
+# Friendly figure defaults (matplotlib only; no seaborn)
+plt.rcParams["figure.dpi"] = 120
+plt.rcParams["savefig.dpi"] = 300
+plt.rcParams["figure.figsize"] = (7, 4.2)
+plt.rcParams["axes.grid"] = True
+plt.rcParams["font.size"] = 11
+
+def find_file(candidates):
+    """
+    Return the first existing path that matches any candidate filename in SEARCH_DIRS.
+    'candidates' can be a str or a list of possible filenames.
+    """
+    if isinstance(candidates, str):
+        candidates = [candidates]
+    for name in candidates:
+        for base in SEARCH_DIRS:
+            p = base / name
+            if p.exists():
+                return p
+    return None
+
+def save_table(df: pd.DataFrame, filename_stem: str, index: bool = False, float_fmt="{:,.3f}"):
+    """
+    Save a DataFrame to multiple formats:
+      - CSV (always)
+      - PNG (if 'dataframe_image' is available, else a Matplotlib fallback)
+      - HTML (always)
+    """
+    csv_path  = OUT_TABLES / f"{filename_stem}.csv"
+    html_path = OUT_TABLES / f"{filename_stem}.html"
+    png_path  = OUT_TABLES / f"{filename_stem}.png"
+
+    # CSV + HTML
+    df.to_csv(csv_path, index=index)
+    df.to_html(html_path, index=index, float_format=lambda x: float_fmt.format(x) if isinstance(x,(int,float,np.floating)) else x)
+
+    # PNG export
+    if dfi is not None:
+        # Styled PNG via dataframe_image (best quality)
+        styled = df.style.format(float_fmt)
+        dfi.export(styled, png_path, table_conversion="matplotlib")
+    else:
+        # Simple Matplotlib fallback
+        fig, ax = plt.subplots(figsize=(min(12, 0.8*(len(df.columns)+2)), 0.6*(len(df)+2)))
+        ax.axis("off")
+        tbl = ax.table(cellText=df.round(3).values, colLabels=df.columns, loc="center")
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(9)
+        tbl.scale(1, 1.3)
+        plt.tight_layout()
+        fig.savefig(png_path, bbox_inches="tight")
+        plt.close(fig)
+
+    return {"csv": str(csv_path), "html": str(html_path), "png": str(png_path)}
+
+def save_fig(fig, filename_stem: str):
+    """Save a Matplotlib figure as PNG and SVG."""
+    png = OUT_CHARTS / f"{filename_stem}.png"
+    svg = OUT_CHARTS / f"{filename_stem}.svg"
+    fig.tight_layout()
+    fig.savefig(png, bbox_inches="tight")
+    fig.savefig(svg, bbox_inches="tight")
+    plt.close(fig)
+    return {"png": str(png), "svg": str(svg)}
+
+def sniff_binary_col(s: pd.Series):
+    """Return True if the series looks like a binary label {0,1}/{False,True}/two-unique-values."""
+    vals = pd.Series(s.dropna().unique())
+    if len(vals) == 2:
+        # normalize
+        lowered = set(str(v).strip().lower() for v in vals)
+        return True, lowered
+    # {0,1} numeric?
+    if set(pd.unique(s.dropna().astype(float).round().clip(0,1))) <= {0,1}:
+        return True, {0,1}
+    return False, set()
+
+def pick_label_and_pred_cols(df: pd.DataFrame):
+    """
+    Heuristic: find label and prediction columns in OOF predictions.
+      label candidates: y, y_true, target, label, outcome, actual
+      proba/score candidates: y_pred_proba, proba, score, pred_proba, probability
+      raw pred candidates: y_pred, prediction, pred
+    """
+    cols = {c.lower(): c for c in df.columns}
+    label_cands = ["y", "y_true", "target", "label", "outcome", "actual"]
+    proba_cands = ["y_pred_proba", "proba", "score", "pred_proba", "probability", "p_pred", "y_score"]
+    pred_cands  = ["y_pred", "prediction", "pred", "predicted"]
+
+    y_col = next((cols[k] for k in label_cands if k in cols), None)
+    proba_col = next((cols[k] for k in proba_cands if k in cols), None)
+    pred_col  = next((cols[k] for k in pred_cands  if k in cols), None)
+
+    # fallbacks
+    if y_col is None:
+        # try any column that looks binary with common names
+        for c in df.columns:
+            is_bin, _ = sniff_binary_col(df[c])
+            if is_bin:
+                y_col = c
+                break
+    return y_col, proba_col, pred_col
+
+def topn_numeric_columns(df, exclude=None, n=8):
+    exclude = set(exclude or [])
+    num_cols = [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
+    # keep top by non-null count
+    num_cols = sorted(num_cols, key=lambda c: df[c].notna().sum(), reverse=True)[:n]
+    return num_cols
+
+MANIFEST = {}  # we’ll fill this with the assets we generate
+
+--- CELL 12 ---
+# =========================================
+# Cell 2 — RQ1: Metrics + OOF diagnostics
+# =========================================
+def rq1_metrics_tables(metrics_path):
+    df = pd.read_csv(metrics_path)
+    # normalize column names
+    df.columns = [c.strip() for c in df.columns]
+    low = {c.lower(): c for c in df.columns}
+
+    # Guess standard columns
+    model_col  = low.get("model") or low.get("estimator") or low.get("algorithm") or low.get("run") or df.columns[0]
+    metric_col = low.get("metric") or low.get("metric_name") or low.get("name") or None
+    value_col  = low.get("value")  or low.get("score")       or low.get("metric_value") or None
+    split_col  = low.get("split")  or low.get("dataset")     or None
+
+    if metric_col is None or value_col is None:
+        # Attempt wide → long if metrics are columns
+        metric_like = [c for c in df.columns if c.lower() not in {model_col.lower(), (split_col or "").lower()} and pd.api.types.is_numeric_dtype(df[c])]
+        if metric_like:
+            df_long = df.melt(id_vars=[model_col] + ([split_col] if split_col else []),
+                              value_vars=metric_like, var_name="metric", value_name="value")
+        else:
+            raise ValueError("Could not identify metric/value columns in metrics CSV.")
+    else:
+        df_long = df.rename(columns={model_col: "model", metric_col: "metric", value_col: "value"})
+        if split_col and split_col != "split":
+            df_long = df_long.rename(columns={split_col: "split"})
+    if "model" not in df_long.columns: df_long = df_long.rename(columns={model_col: "model"})
+
+    # Summaries
+    pivot_all = df_long.pivot_table(index="model", columns="metric", values="value", aggfunc="mean")
+    MANIFEST["rq1_metrics_table"] = save_table(pivot_all.reset_index(), "rq1_metrics_summary", index=False)
+
+    # Per-metric bar charts
+    for m in pivot_all.columns:
+        fig, ax = plt.subplots()
+        pivot_all[m].sort_values(ascending=False).plot(kind="bar", ax=ax)
+        ax.set_ylabel(str(m))
+        ax.set_title(f"RQ1 • {m} by model")
+        assets = save_fig(fig, f"rq1_metric_{str(m).replace(' ', '_')}")
+        MANIFEST.setdefault("rq1_metric_charts", []).append(assets)
+
+def rq1_oof_diagnostics(oof_path):
+    df = pd.read_csv(oof_path)
+    y_col, proba_col, pred_col = pick_label_and_pred_cols(df)
+    if y_col is None:
+        raise ValueError("Could not identify label/target column in OOF predictions.")
+    y = df[y_col].values
+
+    # Classification vs Regression?
+    is_class, _ = sniff_binary_col(pd.Series(y))
+    task = "classification" if is_class else "regression"
+
+    if task == "classification":
+        # pick probability-like column; fallback to pred if it looks 0..1
+        p = None
+        if proba_col is not None:
+            p = df[proba_col].astype(float).values
+        elif pred_col is not None and df[pred_col].between(0,1).all():
+            p = df[pred_col].astype(float).values
+
+        # Confusion at 0.5 (if we only have binary pred, treat as class)
+        if p is None and pred_col is not None:
+            yhat = (df[pred_col].astype(float).values > 0.5).astype(int)
+        elif p is not None:
+            yhat = (p >= 0.5).astype(int)
+        else:
+            # Try to coerce any numeric pred to 0/1
+            candidates = topn_numeric_columns(df, exclude=[y_col], n=1)
+            yhat = (df[candidates[0]].astype(float).values >= 0.5).astype(int)
+
+        # Basic confusion matrix
+        if sklearn is not None:
+            cm = confusion_matrix(y, yhat)
+            cm_df = pd.DataFrame(cm, index=["Actual 0","Actual 1"], columns=["Pred 0","Pred 1"])
+            MANIFEST["rq1_cm_table"] = save_table(cm_df, "rq1_confusion_matrix", index=True)
+
+        # ROC/PR
+        if sklearn is not None and p is not None:
+            fpr, tpr, _ = roc_curve(y, p)
+            roc_auc = auc(fpr, tpr)
+            fig, ax = plt.subplots()
+            ax.plot(fpr, tpr, lw=2)
+            ax.plot([0,1],[0,1], linestyle="--")
+            ax.set_xlabel("FPR")
+            ax.set_ylabel("TPR")
+            ax.set_title(f"RQ1 • ROC (AUC={roc_auc:.3f})")
+            MANIFEST["rq1_roc"] = save_fig(fig, "rq1_roc")
+
+            prec, rec, _ = precision_recall_curve(y, p)
+            ap = average_precision_score(y, p)
+            fig, ax = plt.subplots()
+            ax.plot(rec, prec, lw=2)
+            ax.set_xlabel("Recall")
+            ax.set_ylabel("Precision")
+            ax.set_title(f"RQ1 • Precision–Recall (AP={ap:.3f})")
+            MANIFEST["rq1_pr"] = save_fig(fig, "rq1_pr")
+
+            # Calibration / deciles
+            df_cal = pd.DataFrame({"y": y, "p": p})
+            df_cal["decile"] = pd.qcut(df_cal["p"], 10, labels=False, duplicates="drop")
+            cal = df_cal.groupby("decile").agg(avg_p=("p","mean"), rate=("y","mean"), n=("y","size")).reset_index()
+            MANIFEST["rq1_calibration_table"] = save_table(cal, "rq1_calibration_by_decile", index=False)
+
+            fig, ax = plt.subplots()
+            ax.plot(cal["avg_p"], cal["rate"], marker="o")
+            ax.plot([0,1],[0,1], linestyle="--")
+            ax.set_xlabel("Average predicted probability")
+            ax.set_ylabel("Observed rate")
+            ax.set_title("RQ1 • Calibration")
+            MANIFEST["rq1_calibration_chart"] = save_fig(fig, "rq1_calibration")
+        else:
+            print("Note: sklearn not available or probability column not found — skipped ROC/PR/Calibration.")
+
+    else:  # regression
+        # pick prediction column
+        if pred_col is None:
+            # choose the most 'predict-y' numeric column
+            candidates = topn_numeric_columns(df, exclude=[y_col])
+            if not candidates:
+                raise ValueError("No numeric prediction column found for regression.")
+            pred_col = candidates[0]
+        yhat = df[pred_col].astype(float).values
+        # Metrics
+        mse = mean_squared_error(y, yhat) if sklearn else np.mean((y-yhat)**2)
+        rmse = math.sqrt(mse)
+        mae = mean_absolute_error(y, yhat) if sklearn else np.mean(np.abs(y-yhat))
+        r2  = r2_score(y, yhat) if sklearn else np.nan
+        met = pd.DataFrame([{"MSE": mse, "RMSE": rmse, "MAE": mae, "R2": r2}])
+        MANIFEST["rq1_regression_metrics"] = save_table(met, "rq1_regression_metrics", index=False)
+
+        # Parity plot
+        fig, ax = plt.subplots()
+        ax.scatter(y, yhat, s=10, alpha=0.6)
+        mn = min(np.min(y), np.min(yhat)); mx = max(np.max(y), np.max(yhat))
+        ax.plot([mn,mx],[mn,mx], linestyle="--")
+        ax.set_xlabel("Actual")
+        ax.set_ylabel("Predicted")
+        ax.set_title("RQ1 • Predicted vs Actual")
+        MANIFEST["rq1_parity"] = save_fig(fig, "rq1_parity")
+
+        # Residuals
+        res = yhat - y
+        fig, ax = plt.subplots()
+        ax.hist(res, bins=30)
+        ax.set_title("RQ1 • Residuals")
+        ax.set_xlabel("Residual")
+        MANIFEST["rq1_residuals"] = save_fig(fig, "rq1_residuals")
+
+
+--- CELL 13 ---
+# =========================================
+# Cell 3 — RQ2: Rain quality & monsoon groups
+# =========================================
+def pick_group_col(df: pd.DataFrame, preferred_keywords=("rain","good","poor","group","monsoon","category","cohort")):
+    # prefer columns with keywords and exactly 2–10 unique values
+    candidates = []
+    for c in df.columns:
+        nunq = df[c].nunique(dropna=True)
+        if 2 <= nunq <= 10:
+            score = sum(k in c.lower() for k in preferred_keywords)
+            candidates.append((score, -nunq, c))
+    candidates.sort(reverse=True)
+    return candidates[0][2] if candidates else None
+
+def rq2_good_vs_poor(gpr_path):
+    df = pd.read_csv(gpr_path)
+    group = pick_group_col(df)
+    if group is None:
+        raise ValueError("Could not identify a grouping column (good vs poor rain).")
+    # choose top numeric outcomes
+    num_cols = topn_numeric_columns(df, exclude=[group], n=12)
+    if not num_cols:
+        raise ValueError("No numeric outcome columns found in rq2_good_vs_poor_rain.csv")
+
+    # Two-group comparison tables (mean, std, n, diff, pval if scipy)
+    summary_rows = []
+    groups = [g for g in df[group].dropna().unique()]
+    if len(groups) != 2:
+        # if >2 groups, keep the top 2 by size
+        sizes = df[group].value_counts().index.tolist()[:2]
+        groups = sizes
+
+    gA, gB = groups[0], groups[1]
+    A = df[df[group]==gA]
+    B = df[df[group]==gB]
+
+    for col in num_cols:
+        mA, sA, nA = A[col].mean(), A[col].std(), A[col].notna().sum()
+        mB, sB, nB = B[col].mean(), B[col].std(), B[col].notna().sum()
+        diff = mA - mB
+        pval = np.nan
+        if scipy is not None:
+            try:
+                pval = stats.ttest_ind(A[col].dropna(), B[col].dropna(), equal_var=False).pvalue
+            except Exception:
+                pval = np.nan
+        summary_rows.append({"metric": col, f"mean_{gA}": mA, f"mean_{gB}": mB, "diff": diff, "p_value": pval, f"n_{gA}": nA, f"n_{gB}": nB})
+    tab = pd.DataFrame(summary_rows).sort_values("diff", ascending=False)
+    MANIFEST["rq2_good_poor_table"] = save_table(tab, "rq2_good_vs_poor_summary", index=False)
+
+    # Chart top 8 absolute differences
+    top_cols = tab.reindex(tab["diff"].abs().sort_values(ascending=False).index)[:8]["metric"].tolist()
+    fig, ax = plt.subplots()
+    vals_A = [A[c].mean() for c in top_cols]
+    vals_B = [B[c].mean() for c in top_cols]
+    x = np.arange(len(top_cols))
+    width = 0.4
+    ax.bar(x - width/2, vals_A, width, label=str(gA))
+    ax.bar(x + width/2, vals_B, width, label=str(gB))
+    ax.set_xticks(x, [textwrap.shorten(c, width=30, placeholder="…") for c in top_cols], rotation=20, ha="right")
+    ax.legend()
+    ax.set_title("RQ2 • Good vs Poor Rain — Top differences")
+    MANIFEST["rq2_good_poor_chart"] = save_fig(fig, "rq2_good_vs_poor_topdiffs")
+
+def rq2_monsoon_groups(monsoon_path):
+    df = pd.read_csv(monsoon_path)
+    group = pick_group_col(df, preferred_keywords=("monsoon","group","cluster","regime","phase","state","category"))
+    if group is None:
+        raise ValueError("Could not identify monsoon grouping column.")
+    num_cols = topn_numeric_columns(df, exclude=[group], n=10)
+
+    # Means by group
+    group_means = df.groupby(group)[num_cols].mean().reset_index()
+    MANIFEST["rq2_monsoon_table"] = save_table(group_means, "rq2_monsoon_group_means", index=False)
+
+    # Chart: for each top metric, show grouped bars (limit to 5 metrics to keep chart clean)
+    for col in num_cols[:5]:
+        fig, ax = plt.subplots()
+        ax.bar(group_means[group].astype(str), group_means[col].values)
+        ax.set_title(f"RQ2 • {col} by {group}")
+        ax.set_xlabel(group)
+        ax.set_ylabel(col)
+        MANIFEST.setdefault("rq2_monsoon_charts", []).append(save_fig(fig, f"rq2_monsoon_{col}"))
+
+
+--- CELL 14 ---
+# =========================================
+# Cell 4 — RQ3: GDP interactions/enrichment
+# =========================================
+def rq3_gdp_enrichment(enriched_path):
+    df = pd.read_csv(enriched_path)
+    cols_low = {c.lower(): c for c in df.columns}
+    # Try to find GDP and outcome-ish columns
+    gdp_pred = next((cols_low[k] for k in ["gdp_pred","pred_gdp","gdp_prediction","gdp_hat"] if k in cols_low), None)
+    gdp      = next((cols_low[k] for k in ["gdp","gdp_actual","gdp_true"] if k in cols_low), None)
+
+    outcome_cands = ["y","target","label","outcome","response"]
+    outcome = next((cols_low[k] for k in outcome_cands if k in cols_low), None)
+
+    # If not found, just take top numeric columns as outcomes (excluding GDP fields)
+    exclude = {c for c in [gdp, gdp_pred] if c}
+    outcomes = [outcome] if outcome else topn_numeric_columns(df, exclude=exclude, n=5)
+
+    # Correlation table (Pearson)
+    rows = []
+    base_vars = [c for c in [gdp, gdp_pred] if c] or []
+    for base in base_vars:
+        for tgt in outcomes:
+            if base == tgt: 
+                continue
+            series_base = pd.to_numeric(df[base], errors="coerce")
+            series_tgt  = pd.to_numeric(df[tgt],  errors="coerce")
+            valid = series_base.notna() & series_tgt.notna()
+            if valid.sum() < 3:
+                r = np.nan; p = np.nan
+            else:
+                if scipy is not None:
+                    r, p = stats.pearsonr(series_base[valid], series_tgt[valid])
+                else:
+                    r = np.corrcoef(series_base[valid], series_tgt[valid])[0,1]
+                    p = np.nan
+            rows.append({"x": base, "y": tgt, "pearson_r": r, "p_value": p, "n": int(valid.sum())})
+    corr_tab = pd.DataFrame(rows).sort_values("pearson_r", ascending=False)
+    MANIFEST["rq3_corr_table"] = save_table(corr_tab, "rq3_gdp_correlations", index=False)
+
+    # Scatter charts with simple linear fit, for top 4 |r|
+    top_pairs = corr_tab.reindex(corr_tab["pearson_r"].abs().sort_values(ascending=False).index)[:4]
+    for _, row in top_pairs.iterrows():
+        xcol, ycol = row["x"], row["y"]
+        x = pd.to_numeric(df[xcol], errors="coerce")
+        y = pd.to_numeric(df[ycol], errors="coerce")
+        m = ~ (x.isna() | y.isna())
+        if m.sum() < 3: 
+            continue
+        # simple fit
+        coef = np.polyfit(x[m], y[m], 1)
+        fx = np.poly1d(coef)
+        fig, ax = plt.subplots()
+        ax.scatter(x[m], y[m], s=12, alpha=0.6)
+        xx = np.linspace(x[m].min(), x[m].max(), 100)
+        ax.plot(xx, fx(xx), lw=2)
+        ax.set_xlabel(xcol); ax.set_ylabel(ycol)
+        ax.set_title(f"RQ3 • {xcol} vs {ycol} (r={row['pearson_r']:.2f})")
+        MANIFEST.setdefault("rq3_scatter_charts", []).append(save_fig(fig, f"rq3_scatter_{xcol}_vs_{ycol}".replace(" ","_")))
+
+
+--- CELL 15 ---
+# =========================================
+# Cell 5 — RQ4: Importance & Interaction Uplift
+# =========================================
+def rq4_permutation_importance(perm_path):
+    df = pd.read_csv(perm_path)
+    # Try standard columns
+    cols_low = {c.lower(): c for c in df.columns}
+    feat = cols_low.get("feature") or cols_low.get("variable") or df.columns[0]
+    imp  = cols_low.get("importance") or cols_low.get("permutation_importance") or cols_low.get("score") or df.columns[1]
+
+    # Aggregated (if multiple seeds/folds)
+    imp_tbl = df.groupby(feat)[imp].agg(["mean","std","count"]).reset_index().sort_values("mean", ascending=False)
+    MANIFEST["rq4_perm_table"] = save_table(imp_tbl, "rq4_permutation_importance", index=False)
+
+    # Bar chart top 20
+    top = imp_tbl.head(20)
+    fig, ax = plt.subplots(figsize=(8, max(3.5, 0.35*len(top))))
+    ax.barh(top[feat].astype(str)[::-1], top["mean"][::-1].values)
+    ax.set_xlabel("Permutation importance (mean)")
+    ax.set_title("RQ4 • Top features by permutation importance")
+    MANIFEST["rq4_perm_chart"] = save_fig(fig, "rq4_permutation_importance_top20")
+
+def rq4_interaction_uplift(uplift_path):
+    df = pd.read_csv(uplift_path)
+    cols_low = {c.lower(): c for c in df.columns}
+    # Heuristics
+    feat = cols_low.get("feature") or cols_low.get("variable") or None
+    uplift = cols_low.get("uplift") or cols_low.get("tau") or cols_low.get("effect") or None
+    decile = cols_low.get("decile") or cols_low.get("bucket") or cols_low.get("quantile") or None
+    treat  = cols_low.get("treatment") or cols_low.get("treat") or None
+
+    # If we have decile uplift, chart the curve
+    if decile and uplift:
+        curve = df.groupby(decile)[uplift].mean().reset_index()
+        fig, ax = plt.subplots()
+        ax.plot(curve[decile], curve[uplift], marker="o")
+        ax.set_title("RQ4 • Uplift by decile/bucket")
+        ax.set_xlabel(decile); ax.set_ylabel(uplift)
+        MANIFEST["rq4_uplift_curve"] = save_fig(fig, "rq4_uplift_by_decile")
+
+    # If we have per-feature uplift effects, make a table/chart
+    if feat and uplift:
+        eff = df.groupby(feat)[uplift].agg(["mean","std","count"]).reset_index().sort_values("mean", ascending=False)
+        MANIFEST["rq4_uplift_table"] = save_table(eff, "rq4_feature_uplift_summary", index=False)
+
+        fig, ax = plt.subplots(figsize=(8, max(3.5, 0.35*min(25, len(eff)))))
+        top = eff.head(25)
+        ax.barh(top[feat].astype(str)[::-1], top["mean"][::-1].values)
+        ax.set_xlabel("Estimated uplift (mean)")
+        ax.set_title("RQ4 • Top features by interaction uplift")
+        MANIFEST["rq4_uplift_chart"] = save_fig(fig, "rq4_top_feature_uplifts")

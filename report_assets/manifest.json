@@ -1,1 +1,11 @@
-{}
+{
+  "rq4_perm_table": {
+    "csv": "report_assets\\tables\\rq4_permutation_importance.csv",
+    "html": "report_assets\\tables\\rq4_permutation_importance.html",
+    "png": "report_assets\\tables\\rq4_permutation_importance.png"
+  },
+  "rq4_perm_chart": {
+    "png": "report_assets\\charts\\rq4_permutation_importance_top20.png",
+    "svg": "report_assets\\charts\\rq4_permutation_importance_top20.svg"
+  }
+}

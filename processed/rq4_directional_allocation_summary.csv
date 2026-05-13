@@ -1,0 +1,5 @@
+model,n_holdout_quarters,correct_tilt_rate,n_midcap_signals,avg_actual_excess_ret_after_midcap_signal,n_largecap_signals,avg_actual_excess_ret_after_largecap_signal
+Lagged_Enriched_Ridge,8,0.750000,4,7.127315,4,1.982099
+Momentum_Linear,8,0.750000,8,4.554707,0,
+Core_Enriched_RandomForest,8,0.500000,6,2.834638,2,9.714914
+Core_Enriched_Ridge,8,0.500000,2,2.313714,6,5.301704

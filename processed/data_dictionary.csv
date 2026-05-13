@@ -1,0 +1,26 @@
+variable,definition,role
+quarter_end,Calendar quarter-end date used as the time index.,time index
+year,Calendar year derived from quarter_end.,time label
+quarter,Calendar quarter number derived from quarter_end.,time label
+quarter_label,Readable quarter label in YYYY-Q# format.,time label
+midcap_ret,Current-quarter mid-cap index return in percentage terms.,equity return
+largecap_ret,Current-quarter large-cap index return in percentage terms.,equity return
+excess_ret,Current-quarter mid-cap return minus large-cap return.,relative return
+next_q_excess_ret,Next-quarter mid-cap return minus large-cap return; primary dependent variable.,target
+lag_excess_ret_1q,One-quarter lagged relative return; core momentum benchmark predictor.,benchmark predictor
+lag_excess_ret_2q,Two-quarter lagged relative return; optional momentum predictor.,predictor
+cpi_yoy,Consumer price inflation measured as year-over-year percentage change.,macroeconomic predictor
+gdp_yoy,GDP growth measured as year-over-year percentage change.,macroeconomic predictor
+repo,RBI repo rate level at quarter end.,policy-rate predictor
+repo_chg_bps,Quarterly change in repo rate measured in basis points.,policy-rate predictor
+rain_anom,Southwest monsoon rainfall anomaly percentage versus normal rainfall.,climate predictor
+good_monsoon_flag,Equals 1 when rain_anom is at least the configured positive threshold.,RQ2 flag
+poor_monsoon_flag,Equals 1 when rain_anom is at most the configured negative threshold.,RQ2 flag
+normal_monsoon_flag,Equals 1 when rain_anom lies between the good and poor monsoon thresholds.,RQ2 flag
+target_direction,Equals 1 when next_q_excess_ret is positive; otherwise 0 when target is available.,allocation classification target
+allocation_signal_label,Readable interpretation of whether mid-cap or large-cap exposure performed better next quarter.,interpretation label
+lag_cpi_yoy_1q,One-quarter lagged value of cpi_yoy.,lagged predictor
+lag_gdp_yoy_1q,One-quarter lagged value of gdp_yoy.,lagged predictor
+lag_repo_1q,One-quarter lagged value of repo.,lagged predictor
+lag_repo_chg_bps_1q,One-quarter lagged value of repo_chg_bps.,lagged predictor
+lag_rain_anom_1q,One-quarter lagged value of rain_anom.,lagged predictor
